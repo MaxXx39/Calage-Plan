@@ -37,10 +37,6 @@ from calage_core.vue import PlanAffiche
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
-TYPES_PLAN_SUGGERES = ["Terrassement", "Canalisations", "Travaux spéciaux", "Coffrage",
-                       "Architecte", "Implantation", "Façades", "Aménagements extérieurs"]
-
-
 class ErreurAppli(Exception):
     """Erreur à afficher telle quelle à l'utilisateur."""
 
@@ -168,23 +164,31 @@ class Session:
             self.calage = res
         return res.vers_dict()
 
-    def calage_auto(self, chantier: str | None) -> dict:
-        """Cherche le calage en comparant le plan aux plans déjà calés du chantier et à la référence."""
+    def calage_auto(self, chantier: str | None, ids: list[str] | None = None,
+                    avec_reference: bool = True) -> dict:
+        """Cherche le calage en comparant le plan à des plans déjà calés du chantier et/ou à la référence.
+
+        ids : plans calés choisis (« chantier/type/indice ») ; None = le dernier indice de chaque type.
+        """
         with self.verrou:
             if "plan" not in self.elements:
                 raise ErreurAppli("Plan non chargé.")
-            cibles, sources = [], []
-            if chantier:
+            if ids is None and chantier:
+                ids = []
                 for d_type in sorted((self._d_chantier(chantier) / "plans").glob("*")):
                     dernier = self._dernier_indice(d_type)
                     if dernier is not None:
-                        info = json.loads((dernier / "info.json").read_text(encoding="utf-8"))
-                        sortie = dernier / info["fichier_sortie"]
-                        if sortie.exists():
-                            ex = exploser_document(lire_plan(sortie).doc)
-                            cibles.append(tableau_segments(e.entite for e in ex.elements))
-                            sources.append(f"{d_type.name} ({info.get('indice') or info['plan']})")
-            if "ref" in self.elements:
+                        ids.append(f"{self._d_chantier(chantier).name}/{d_type.name}/{dernier.name}")
+            cibles, sources = [], []
+            for ident in ids or []:
+                d = self._chemin_indice(ident)
+                info = json.loads((d / "info.json").read_text(encoding="utf-8"))
+                sortie = d / info["fichier_sortie"]
+                if sortie.exists():
+                    ex = exploser_document(lire_plan(sortie).doc)
+                    cibles.append(tableau_segments(e.entite for e in ex.elements))
+                    sources.append(f"{ident.split('/')[1]} ({info.get('indice') or info['plan']})")
+            if avec_reference and "ref" in self.elements:
                 cibles.append(tableau_segments(e.entite for e in self.elements["ref"]))
                 sources.append("référence")
             if not cibles:
@@ -252,7 +256,9 @@ class Session:
                 types.append({"type": t.name, "cree_le": data.get("cree_le", ""),
                               "plan": data.get("source", {}).get("plan", ""), "indices": indices})
             out.append({"nom": d.name, "reference": ref.name if ref else None, "types": types})
-        return {"chantiers": out, "types_suggeres": TYPES_PLAN_SUGGERES}
+        # liste des types : uniquement ceux que l'utilisateur a déjà créés (tous chantiers confondus)
+        tous_types = sorted({t["type"] for c in out for t in c["types"]}, key=str.lower)
+        return {"chantiers": out, "types_existants": tous_types}
 
     def _dernier_indice(self, d_type: Path) -> Path | None:
         ind = sorted((d_type / "indices").glob("*/info.json"))

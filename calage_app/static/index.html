@@ -30,7 +30,7 @@
           </label>
           <datalist id="liste-chantiers"></datalist>
           <label class="champ">Type de plan
-            <input id="type-plan" list="liste-types" placeholder="ex. Terrassement, Canalisations…" autocomplete="off">
+            <input id="type-plan" list="liste-types" placeholder="nouveau type ou type existant" autocomplete="off">
           </label>
           <datalist id="liste-types"></datalist>
           <p id="avert-type" class="aide"></p>
@@ -64,6 +64,7 @@
         <div class="contenu">
           <button id="calage-auto" class="secondaire">Calage automatique
             <small>chercher dans les plans déjà calés du chantier et la référence</small></button>
+          <details id="choix-auto"><summary>Comparer avec…</summary><div id="liste-auto"></div></details>
           <div id="bandeau-auto"></div>
           <p class="aide" id="aide-calage">Ou à la main : cliquez un élément sur le <b>plan</b> (gauche),
             puis le <b>même</b> sur la <b>référence</b> (droite). L'accroche apparaît avant le clic.

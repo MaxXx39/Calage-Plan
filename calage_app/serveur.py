@@ -106,7 +106,8 @@ def fabriquer_gestionnaire(session: Session):
                 if url.path == "/api/calage":
                     return self._json(session.caler(d["elements"], bool(d.get("auto"))))
                 if url.path == "/api/calage_auto":
-                    return self._json(session.calage_auto(d.get("chantier")))
+                    return self._json(session.calage_auto(d.get("chantier"), d.get("ids"),
+                                                          d.get("avec_reference", True)))
                 if url.path == "/api/exporter":
                     return self._json(session.exporter(
                         d["chantier"], d["type_plan"], d.get("indice", ""), d.get("prefixe", ""),

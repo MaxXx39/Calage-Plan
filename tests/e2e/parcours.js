@@ -123,6 +123,8 @@ const PLAN_B = process.argv[3];
   await p.setInputFiles('.depot[data-role="plan"] input', PLAN_B);
   await p.waitForSelector('.depot[data-role="plan"].charge', { timeout: 60000 });
   await p.click('#vers-calage');
+  await p.click('#choix-auto summary');                 // liste des plans avec lesquels comparer
+  log('CHOIX AUTO', (await p.textContent('#liste-auto')).replace(/\s+/g, ' ').slice(0, 160));
   await p.click('#calage-auto');
   await p.waitForSelector('#bandeau-auto .verdict', { timeout: 120000 });
   await p.waitForTimeout(500);

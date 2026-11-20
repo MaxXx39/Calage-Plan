@@ -285,7 +285,7 @@ function changerOnglet(o) {
 async function chargerChantiers() {
   try {
     const r = await api("/api/chantiers");
-    etat.chantiers = r.chantiers; etat.typesSuggeres = r.types_suggeres;
+    etat.chantiers = r.chantiers; etat.typesSuggeres = r.types_existants;
   } catch (e) { toast(e.message); return; }
   $("#liste-chantiers").innerHTML = etat.chantiers.map((c) => `<option value="${esc(c.nom)}">`).join("");
   majTypesProposes();
@@ -397,8 +397,24 @@ $("#vers-calage").addEventListener("click", () => {
     toast("Indiquez le chantier et le type de plan (ils servent à ranger la recette).", true);
     return;
   }
-  ouvrirEtape(2); afficherElements(); montrerCoteACote();
+  ouvrirEtape(2); afficherElements(); montrerCoteACote(); remplirChoixAuto();
 });
+
+// Plans avec lesquels le calage automatique se compare : n'importe quel indice calé du chantier
+function remplirChoixAuto() {
+  const ch = chantierNomme($("#chantier").value);
+  let h = `<label class="case"><input type="checkbox" id="auto-ref" checked> Référence MN95</label>`;
+  const avecIndices = ch ? ch.types.filter((t) => t.indices.length) : [];
+  for (const t of avecIndices) {
+    h += `<div class="type">${esc(t.type)}</div>` + t.indices.map((i, k) =>
+      `<label class="case"><input type="checkbox" class="auto-id" value="${esc(i.id)}" ${k === 0 ? "checked" : ""}>
+        ${esc(i.indice || i.plan)} <small>${esc((i.date || "").replace("T", " ").slice(0, 16))}</small></label>`).join("");
+  }
+  h += avecIndices.length
+    ? `<p class="aide">Par défaut : le dernier indice de chaque type. Cochez ceux que vous voulez.</p>`
+    : `<p class="aide">Aucun autre plan calé sur ce chantier pour l'instant : comparaison avec la référence seule (souvent insuffisant).</p>`;
+  $("#liste-auto").innerHTML = h;
+}
 
 // =========================================================================== calage
 function reinitialiserCalage() {
@@ -563,7 +579,11 @@ function afficherResultatCalage(r) {
 $("#calage-auto").addEventListener("click", async () => {
   try {
     const r = await avecAttente("Recherche des éléments communs avec les plans du chantier…",
-      () => api("/api/calage_auto", { chantier: $("#chantier").value }));
+      () => api("/api/calage_auto", {
+        chantier: $("#chantier").value,
+        ids: $$("#liste-auto .auto-id:checked").map((c) => c.value),
+        avec_reference: $("#auto-ref") ? $("#auto-ref").checked : true,
+      }));
     etat.auto = true;
     const c = r.confiance;
     const cls = { forte: "bon", moyenne: "averifier", faible: "mauvais" }[c.niveau];

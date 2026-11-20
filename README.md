@@ -29,14 +29,14 @@ python -m calage interface
 ```
 
 Une page s'ouvre dans le navigateur (servie sur 127.0.0.1 : aucun fichier ne quitte le poste).
-Les plans sont rangés **par chantier et par type de plan** (Terrassement, Canalisations,
-Travaux spéciaux…) dans `~/CalagePlans/chantiers/<chantier>/plans/<type>/`.
+Les plans sont rangés **par chantier et par type de plan** (la liste des types se construit au fur
+et à mesure : chaque nouveau type saisi est ensuite proposé) dans `~/CalagePlans/chantiers/<chantier>/plans/<type>/`.
 
 **Caler un nouveau plan** — une fois par type de plan :
 1. *Chantier et fichiers* : chantier, type de plan, indice ; référence MN95 (reprise automatiquement
    si le chantier en a déjà une), plan à caler, xrefs éventuels.
-2. *Calage* : soit **Calage automatique** (cherche les éléments communs avec les plans déjà calés du
-   chantier et la référence, avec un niveau de confiance), soit à la main avec des **points** et/ou des
+2. *Calage* : soit **Calage automatique** (cherche les éléments communs avec les plans calés du chantier
+   — n'importe quels indices, au choix dans « Comparer avec… » — et la référence ; niveau de confiance), soit à la main avec des **points** et/ou des
    **axes** (ex. 2 axes + 1 point). L'accroche (sommet □, centre ○, intersection ×, ligne) s'affiche
    avant le clic. Un élément de **contrôle** vérifie le calage (vert < 1 cm, orange < 5 cm, rouge).
 3. *Nettoyage* : un clic sur un objet sélectionne **tout son calque** (mode « Écarter au clic »,

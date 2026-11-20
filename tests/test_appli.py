@@ -154,6 +154,7 @@ def test_serveur_parcours_complet(serveur, plan_b_decale):
     ch = _get(serveur + "/api/chantiers")["chantiers"]
     assert ch[0]["nom"] == "Chantier A" and ch[0]["reference"] == "reference.dwg"
     assert ch[0]["types"][0]["type"] == "Terrassement"
+    assert _get(serveur + "/api/chantiers")["types_existants"] == ["Terrassement"]
     # nouvel indice décalé -> recalé automatiquement, rangé avec le type de plan
     _post(f"{serveur}/api/fichier?role=indice&nom=plan_B.dxf", octets=plan_b_decale.read_bytes())
     i = _post(serveur + "/api/indice", {"chantier": "Chantier A", "type_plan": "Terrassement", "indice": "B"})
@@ -174,6 +175,10 @@ def test_serveur_parcours_complet(serveur, plan_b_decale):
     _post(serveur + "/api/ouvrir", {"role": "plan"})
     au = _post(serveur + "/api/calage_auto", {"chantier": "Chantier A"})
     assert au["confiance"]["niveau"] == "forte"
+    # comparaison avec un indice choisi (l'ancien indice A), sans la référence
+    au = _post(serveur + "/api/calage_auto", {"chantier": "Chantier A", "ids": [indices[1]["id"]],
+                                              "avec_reference": False})
+    assert au["confiance"]["niveau"] == "forte" and au["confiance"]["compare_avec"] == ["Terrassement (A)"]
     ctrl = _post(serveur + "/api/calage", {"auto": True, "elements": [
         {"type": "point", "plan": [P3[0][0] + 1000, P3[0][1] - 500], "ref": P3[1]}]})
     assert ctrl["verdict"] == "bon"
