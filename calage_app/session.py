@@ -230,7 +230,7 @@ class Session:
             n = sum(presents.get(t, 0) for t in types)
             if n:
                 out.append({"libelle": lib, "types": types, "n": n, "coche": lib in FAMILLES_PAR_DEFAUT})
-        return {"familles": out}
+        return {"familles": out, "nb_hachures": presents.get("HATCH", 0)}
 
     # ================================================================== chantiers
     def chantiers(self) -> dict:
@@ -266,7 +266,8 @@ class Session:
 
     # ================================================================== export (premier plan)
     def exporter(self, chantier: str, type_plan: str, indice: str, prefixe: str,
-                 calques_gardes: list, familles: list, zone, renommages: dict | None = None) -> dict:
+                 calques_gardes: list, familles: list, zone, renommages: dict | None = None,
+                 hachures: str = "garder") -> dict:
         with self.verrou:
             if self.calage is None:
                 raise ErreurAppli("Faites d'abord le calage.")
@@ -289,7 +290,7 @@ class Session:
                 self.fichiers["plan"], self.lus["plan"], self.elements["plan"], self.calage,
                 calques_gardes, types, prefixe, zone,
                 nom_reference=ref.name if ref else None, renommages=renommages,
-                chantier=d_ch.name, type_plan=nom_sur(type_plan))
+                chantier=d_ch.name, type_plan=nom_sur(type_plan), hachures=hachures)
             d_t = self._d_type(chantier, type_plan)
             d_t.mkdir(parents=True, exist_ok=True)
             chemin_recette = d_t / "recette.json"
@@ -301,19 +302,51 @@ class Session:
 
     # ================================================================== indices suivants
     def caler_indice(self, chantier, type_plan, indice, forcer, ecarter_nouveaux) -> dict:
+        """Cale un nouvel indice SANS l'enregistrer : il attend la validation de l'utilisateur."""
         with self.verrou:
             if "indice" not in self.fichiers:
                 raise ErreurAppli("Déposez d'abord le nouvel indice.")
-            return self._appliquer("indice", chantier, type_plan, indice, forcer, ecarter_nouveaux)
+            return self._appliquer("indice", chantier, type_plan, indice, forcer, ecarter_nouveaux,
+                                   en_attente=True)
 
-    def _appliquer(self, role, chantier, type_plan, indice, forcer, ecarter_nouveaux) -> dict:
+    def valider_indice(self, chantier, type_plan, attente: str) -> dict:
+        """L'utilisateur a vérifié le résultat : l'indice rejoint la liste des indices du type de plan."""
+        with self.verrou:
+            d_t = self._d_type(chantier, type_plan)
+            d_a = d_t / "a_valider" / nom_sur(attente)
+            if not (d_a / "attente.json").exists():
+                raise ErreurAppli("Indice à valider introuvable (déjà validé ou abandonné ?).")
+            precedent = self._dernier_indice(d_t)
+            (d_t / "indices").mkdir(exist_ok=True)
+            d_i = d_t / "indices" / d_a.name
+            shutil.move(str(d_a), str(d_i))
+            (d_i / "attente.json").rename(d_i / "info.json")
+            info = json.loads((d_i / "info.json").read_text(encoding="utf-8"))
+            ident = uuid.uuid4().hex[:16]
+            self.telechargements[ident] = d_i / info["fichier_sortie"]
+            rep = {"id": f"{d_t.parent.parent.name}/{d_t.name}/{d_i.name}", "indice": info.get("indice"),
+                   "telecharger": f"/telecharger?id={ident}", "chemin_sortie": str(d_i / info["fichier_sortie"])}
+            if precedent is not None:
+                rep["precedent"] = f"{d_t.parent.parent.name}/{d_t.name}/{precedent.name}"
+            return rep
+
+    def abandonner_indice(self, chantier, type_plan, attente: str) -> dict:
+        with self.verrou:
+            d_a = self._d_type(chantier, type_plan) / "a_valider" / nom_sur(attente)
+            if d_a.is_dir() and (d_a / "attente.json").exists():
+                shutil.rmtree(d_a)
+            return {"ok": True}
+
+    def _appliquer(self, role, chantier, type_plan, indice, forcer, ecarter_nouveaux,
+                   en_attente: bool = False) -> dict:
         d_t = self._d_type(chantier, type_plan)
         chemin_recette = d_t / "recette.json"
         if not chemin_recette.exists():
             raise ErreurAppli(f"Type de plan « {type_plan} » introuvable pour le chantier « {chantier} ».")
         plan = self.fichiers[role]
         horo = dt.datetime.now()
-        d_i = d_t / "indices" / f"{horo:%Y%m%d-%H%M%S}_{nom_sur(indice or Path(plan).stem)}"
+        dossier = "a_valider" if en_attente else "indices"
+        d_i = d_t / dossier / f"{horo:%Y%m%d-%H%M%S}_{nom_sur(indice or Path(plan).stem)}"
         d_i.mkdir(parents=True)
         sortie = d_i / f"{Path(plan).stem}_MN95.dxf"
         rap = appliquer(plan, chemin_recette, sortie, forcer=forcer,
@@ -333,16 +366,20 @@ class Session:
             shutil.move(str(d_i), str(refus / d_i.name))
             d_i = refus / d_i.name
         else:
-            (d_i / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+            nom_info = "attente.json" if en_attente else "info.json"
+            (d_i / nom_info).write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
         reponse = {"rapport": rap.vers_dict(), "texte": rap.texte(), "chantier": nom_sur(chantier),
-                   "type_plan": nom_sur(type_plan)}
+                   "type_plan": nom_sur(type_plan), "indice": indice or ""}
         if rap.fichier_produit:
-            ident = uuid.uuid4().hex[:16]
-            self.telechargements[ident] = d_i / sortie.name
-            reponse["telecharger"] = f"/telecharger?id={ident}"
-            reponse["chemin_sortie"] = str(d_i / sortie.name)
             reponse["resultat"] = self._geometrie(d_i / sortie.name)
-            reponse["id"] = f"{nom_sur(chantier)}/{nom_sur(type_plan)}/{d_i.name}"
+            if en_attente:
+                reponse["attente"] = d_i.name
+            else:
+                ident = uuid.uuid4().hex[:16]
+                self.telechargements[ident] = d_i / sortie.name
+                reponse["telecharger"] = f"/telecharger?id={ident}"
+                reponse["chemin_sortie"] = str(d_i / sortie.name)
+                reponse["id"] = f"{nom_sur(chantier)}/{nom_sur(type_plan)}/{d_i.name}"
         ref = self._reference_chantier(chantier)
         if ref is not None:
             reponse["reference"] = self._geometrie(ref)

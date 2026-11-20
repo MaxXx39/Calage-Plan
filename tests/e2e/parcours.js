@@ -102,24 +102,22 @@ const PLAN_B = process.argv[3];
   await p.click('#caler-indice');
   await p.waitForSelector('#resultat-indice .bandeau', { timeout: 120000 });
   log('INDICE', (await p.textContent('#resultat-indice .bandeau')).trim().slice(0, 80));
-  // ---------- chantiers : différences A -> B
-  await p.click('.onglet[data-onglet="chantiers"]');
-  await p.waitForSelector('#arbre input');
-  await p.waitForTimeout(800);                 // la liste se rafraîchit à l'ouverture de l'onglet
-  const n = await p.locator('#arbre input').count();
-  for (let i = 0; i < n; i++) await p.locator('#arbre input').nth(i).check();
-  await p.click('#differences');
+  await p.click('#valider-indice');                       // validation explicite de l'indice
+  await p.waitForSelector('#comparer-precedent', { timeout: 60000 });
+  await p.screenshot({ path: OUT + '/v2_indice_valide.png' });
+  log('VALIDE', (await p.textContent('#resultat-indice .bandeau')).trim());
+  // ---------- différences avec l'indice précédent (bouton direct)
+  await p.click('#comparer-precedent');
   await p.waitForSelector('#legende div', { timeout: 120000 });
   await p.waitForTimeout(400);
   await p.screenshot({ path: OUT + '/v2_differences.png' });
   log('DIFF', (await p.textContent('#legende')).replace(/\s+/g, ' ').slice(0, 160));
   // ---------- calage automatique d'un autre type de plan du même chantier
-  await p.reload();
-  await p.fill('#chantier', 'Gland City One');
-  await p.fill('#type-plan', 'Canalisations');
-  await p.waitForTimeout(600);
-  await p.click('#ref-chantier');
+  await p.waitForTimeout(500);
+  await p.click('#ajout-type');                           // « + caler un nouveau type de plan sur ce chantier »
   await p.waitForSelector('.depot[data-role="ref"].charge', { timeout: 60000 });
+  log('NOUVEAU TYPE : chantier =', await p.inputValue('#chantier'));
+  await p.fill('#type-plan', 'Canalisations');
   await p.setInputFiles('.depot[data-role="plan"] input', PLAN_B);
   await p.waitForSelector('.depot[data-role="plan"].charge', { timeout: 60000 });
   await p.click('#vers-calage');

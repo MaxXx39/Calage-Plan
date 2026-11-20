@@ -20,6 +20,17 @@ from .recette import UNITES_INSUNITS, Recette
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
 
+def contours_hachure(hachure) -> list:
+    """Polylignes (LWPOLYLINE) des contours d'une hachure, mêmes calque / couleur."""
+    from ezdxf import path as ezpath
+    try:
+        chemins = ezpath.from_hatch(hachure)
+        attribs = {"layer": hachure.dxf.get("layer", "0"), "color": hachure.dxf.get("color", 256)}
+        return list(ezpath.to_lwpolylines(chemins, distance=0.01, segments=8, dxfattribs=attribs))
+    except Exception:
+        return []
+
+
 @dataclass
 class Rapport:
     """Tout ce qui s'est passé, pour la console et pour le fichier JSON."""
@@ -173,6 +184,8 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
     gardes = recette.calques_gardes()
     ecartes = recette.calques_ecartes()
     types_supprimes = set(net.get("types_supprimes", []))
+    hachures = "supprimer" if "HATCH" in types_supprimes else net.get("hachures", "garder")
+    nb_contours = 0
     types_calque = {nom_normalise(c): set(ts) for c, ts in net.get("types_supprimes_par_calque", {}).items()}
     prefixe = net.get("prefixe_calque", "")
     zone = recette.zone.get("emprise_mn95")
@@ -214,7 +227,15 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
                 if not dedans.any():
                     hors_zone += 1
                     continue
-        if t in COMPLEXES:
+        if t == "HATCH" and hachures == "contour":
+            # la hachure est remplacée par la (les) polyligne(s) de son contour
+            lws = contours_hachure(el.entite)
+            if not lws:
+                exporteur.non_transformables["HATCH"] += 1
+            for lw in lws:
+                exporteur.ajouter(lw, m, sortie, el.calque)
+            nb_contours += 1
+        elif t in COMPLEXES:
             enfants = exploser_complexe(el.entite)
             if not enfants:
                 exporteur.non_transformables[t] += 1
@@ -240,6 +261,8 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
     if exporteur.non_transformables:
         rap.alertes.append("Entités non transformables, ABSENTES du résultat : " + ", ".join(
             f"{t} ({n})" for t, n in exporteur.non_transformables.items()))
+    if nb_contours:
+        rap.infos.append(f"{nb_contours} hachure(s) remplacée(s) par leur contour.")
     manuels = recette.ajouts_manuels.get("par_calque", {})
     if manuels:
         rap.infos.append("Rappel : éléments ajoutés à la main sur l'indice appris, NON rejoués : " +

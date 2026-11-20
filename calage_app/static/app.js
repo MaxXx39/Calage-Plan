@@ -320,6 +320,35 @@ $("#ref-chantier").addEventListener("click", async () => {
   } catch { /* déjà signalé */ }
 });
 
+// Recommencer : un autre plan du même chantier (référence gardée) ou un nouveau chantier
+function nouveauPlan(memeChantier, type = "") {
+  changerOnglet("projet");
+  etat.geo.plan = null; etat.infos.plan = null; etat.resultatProjet = null;
+  etat.familles = []; etat.zone = null; etat.historique = []; etat.selection = null;
+  reinitialiserCalage();
+  $("#type-plan").value = type; $("#indice").value = "";
+  for (const role of ["plan", "xref"]) {
+    const l = $(`.depot[data-role="${role}"]`);
+    l.classList.remove("charge"); l.querySelector(".etat").textContent = "";
+  }
+  if (!memeChantier) {
+    $("#chantier").value = "";
+    etat.geo.ref = null; etat.infos.ref = null;
+    const l = $('.depot[data-role="ref"]');
+    l.classList.remove("charge"); l.querySelector(".etat").textContent = "";
+  }
+  $("#alertes-fichiers").innerHTML = "";
+  $("#resultat-export").innerHTML = "";
+  $("#vers-calage").disabled = true;
+  majTypesProposes();
+  ouvrirEtape(1);
+  preparerVuesDoubles();
+  afficherVues(etat.geo.ref ? "double" : "accueil",
+    "Indiquez le <b>chantier</b>, puis déposez la <b>référence MN95</b> et le <b>plan à caler</b> à gauche.");
+  if (etat.geo.ref) requestAnimationFrame(() => vRef.ajuster(etat.geo.ref.emprise));
+  (memeChantier ? $("#type-plan") : $("#chantier")).focus();
+}
+
 // =========================================================================== étapes
 function ouvrirEtape(n) {
   $$("#onglet-projet .etape").forEach((e) => {
@@ -373,7 +402,7 @@ function apresOuverture(role, label, r) {
   if (role === "plan") {
     reinitialiserCalage();
     etat.gardes = new Set(r.geometrie.calques.map((c) => c.nom));
-    etat.zone = null; etat.historique = [];
+    etat.zone = null; etat.historique = []; etat.familles = [];
     const base = r.nom.replace(/\.[^.]+$/, "");
     $("#prefixe").value = `DWG_${base} - `;
   }
@@ -638,6 +667,7 @@ function couleurPlanSuperpose(g) {
   const geo = etat.geo.plan, nom = geo.calques[g.l].nom;
   if (etat.etape >= 3) {
     if (typesSupprimes().has(geo.types[g.t])) return null;
+    if (geo.types[g.t] === "HATCH" && modeHachures() === "supprimer") return null;
     if (!etat.gardes.has(nom)) return $("#voir-ecartes").checked ? "#e4e6ea" : null;
   }
   if (g.l === etat.selection) return "#ff8a00";
@@ -647,8 +677,16 @@ function couleurPlanSuperpose(g) {
 $("#couleurs-calques").addEventListener("change", () => vUnique.dessiner());
 $("#voir-ecartes").addEventListener("change", () => vUnique.dessiner());
 
+const modeHachures = () => ($('input[name="hachures"]:checked') || { value: "garder" }).value;
+$$('input[name="hachures"]').forEach((r) => r.addEventListener("change", () => vUnique.dessiner()));
+
 async function preparerNettoyage() {
-  if (!etat.familles.length) etat.familles = (await api("/api/familles")).familles;
+  if (!etat.familles.length) {
+    const r = await api("/api/familles");
+    etat.familles = r.familles;
+    $("#bloc-hachures").hidden = !r.nb_hachures;
+    $("#nb-hachures").textContent = r.nb_hachures ? `(${r.nb_hachures})` : "";
+  }
   $("#familles").innerHTML = etat.familles.map((f, i) =>
     `<label><input type="checkbox" data-famille="${i}" ${f.coche ? "checked" : ""}> ${esc(f.libelle)} <small>(${f.n})</small></label>`).join("");
   $$("#familles input").forEach((c) => c.addEventListener("change", () => { etat.familles[+c.dataset.famille].coche = c.checked; vUnique.dessiner(); }));
@@ -796,6 +834,7 @@ $("#exporter").addEventListener("click", async () => {
     prefixe: $("#prefixe").value, calques: [...etat.gardes],
     familles: etat.familles.filter((f) => f.coche).map((f) => f.libelle),
     zone: etat.zone && etat.zone.fermee ? etat.zone.pts : null,
+    hachures: modeHachures(),
   };
   try {
     const r = await avecAttente("Création du DXF calé et de la recette…", () => api("/api/exporter", corps));
@@ -816,7 +855,7 @@ const nomType = (t) => NOMS_TYPES[t] || t;
 function afficherRapport(cible, rep, creation) {
   const r = rep.rapport, mode = r.mode;
   const titres = {
-    "identique": creation ? "DXF calé créé, recette enregistrée" : "Calé : même origine que l'indice appris",
+    "identique": creation ? "DXF calé créé, recette enregistrée" : "Calé : même origine que l'indice précédent",
     "recalé": "Calé AVEC CORRECTION AUTOMATIQUE : le plan avait bougé",
     "forcé": "Produit SANS CONTRÔLE (forcé) : à vérifier soigneusement",
     "refus": "Refusé : aucun fichier produit",
@@ -827,7 +866,8 @@ function afficherRapport(cible, rep, creation) {
   h += `</div>`;
   if (rep.telecharger) h += `<a class="telecharger" href="${rep.telecharger}">Télécharger le DXF calé</a>`;
   if (mode === "refus" && !creation) {
-    h += `<p class="aide">Que faire : recaler ce plan dans l'onglet « Caler un nouveau plan » (le calage automatique peut aider).</p>
+    h += `<p class="aide">Rien n'a été enregistré. Que faire : recaler ce plan dans l'onglet « Caler un nouveau plan »
+      (même chantier, même type de plan ; le calage automatique peut aider).</p>
       <button id="forcer" class="danger">Produire quand même (déconseillé)</button>`;
   }
   const al = r.alertes.filter((a) => !(r.controle.message && a.includes(r.controle.message)));
@@ -850,8 +890,14 @@ function afficherRapport(cible, rep, creation) {
     if (rep.chemin_sortie) h += `<p class="aide">Enregistré aussi dans : ${esc(rep.chemin_sortie)}</p>`;
   }
   h += `<details><summary>Rapport complet</summary><pre>${esc(rep.texte)}</pre></details>`;
-  if (creation) h += `<p class="aide">Indices suivants : onglet <b>« Nouvel indice »</b>, chantier « ${esc(rep.chantier)} », type « ${esc(rep.type_plan)} ».</p>`;
+  if (creation) h += `<p class="aide">Indices suivants de ce plan : onglet <b>« Nouvel indice »</b>, chantier « ${esc(rep.chantier)} », type « ${esc(rep.type_plan)} ».</p>
+    <div class="boutons"><button id="autre-plan" class="principal">Caler un autre plan sur ce chantier</button>
+    <button id="nouveau-chantier">Nouveau chantier</button></div>`;
   cible.innerHTML = h;
+  const ba = cible.querySelector("#autre-plan");
+  if (ba) ba.addEventListener("click", () => nouveauPlan(true));
+  const bn = cible.querySelector("#nouveau-chantier");
+  if (bn) bn.addEventListener("click", () => nouveauPlan(false));
   const bf = cible.querySelector("#forcer");
   if (bf) bf.addEventListener("click", () => {
     if (confirm("Le contrôle a échoué : le fichier produit risque d'être FAUX. Produire quand même ?")) calerIndice(true);
@@ -872,28 +918,49 @@ function montrerResultat(rep) {
 
 // =========================================================================== nouvel indice
 function remplirSelectsIndice() {
-  const sc = $("#i-chantier"), avant = sc.value;
+  const sc = $("#i-chantier"), avant = sc.value, indiceSaisi = $("#i-indice").value;
   const avecTypes = etat.chantiers.filter((c) => c.types.length);
   sc.innerHTML = avecTypes.length ? avecTypes.map((c) => `<option>${esc(c.nom)}</option>`).join("")
     : `<option value="">(aucun chantier : calez d'abord un plan)</option>`;
   if (avant && avecTypes.some((c) => c.nom === avant)) sc.value = avant;
   remplirTypesIndice();
+  if (indiceSaisi && avant === sc.value) { $("#i-indice").value = indiceSaisi; majInfoIndice(false); }
 }
 function remplirTypesIndice() {
   const ch = etat.chantiers.find((c) => c.nom === $("#i-chantier").value);
   const st = $("#i-type"), avant = st.value;
   st.innerHTML = ch ? ch.types.map((t) => `<option>${esc(t.type)}</option>`).join("") : "";
   if (avant && ch && ch.types.some((t) => t.type === avant)) st.value = avant;
-  majInfoIndice();
+  majInfoIndice(true);
 }
-function majInfoIndice() {
+// Indice suivant proposé : A -> B, 3 -> 4, B2 -> B3 ; sinon rien
+function indiceSuivant(dernier) {
+  if (!dernier) return "";
+  const m = dernier.match(/^(.*?)(\d+)$/);
+  if (m) return m[1] + String(+m[2] + 1);
+  if (/^[A-Ya-y]$/.test(dernier)) return String.fromCharCode(dernier.charCodeAt(0) + 1);
+  return "";
+}
+function typeIndiceChoisi() {
   const ch = etat.chantiers.find((c) => c.nom === $("#i-chantier").value);
-  const t = ch && ch.types.find((x) => x.type === $("#i-type").value);
-  $("#i-info").textContent = t ? `Recette créée le ${t.cree_le.replace("T", " à ")} sur « ${t.plan} » — ${t.indices.length} indice(s) calé(s)` : "";
+  return ch && ch.types.find((x) => x.type === $("#i-type").value);
+}
+function majInfoIndice(proposer = false) {
+  const t = typeIndiceChoisi();
+  $("#i-info").textContent = t ? `Recette créée le ${t.cree_le.replace("T", " à ")} sur « ${t.plan} ».` : "";
+  $("#i-historique").innerHTML = t && t.indices.length
+    ? `<b>Indices déjà validés :</b><ol reversed>${t.indices.map((i) => `<li>${esc(i.indice || i.plan)}
+        <small>${esc((i.date || "").replace("T", " ").slice(0, 16))}${i.mode && i.mode !== "identique" ? " · " + esc(i.mode) : ""}</small></li>`).join("")}</ol>`
+    : "";
+  if (proposer && t) $("#i-indice").value = indiceSuivant(t.indices.length ? t.indices[0].indice : "");
+  const nom = $("#i-indice").value.trim().toLowerCase();
+  $("#i-avert-indice").textContent = t && nom && t.indices.some((i) => (i.indice || "").toLowerCase() === nom)
+    ? "Attention : un indice porte déjà ce nom pour ce type de plan." : "";
   $("#caler-indice").disabled = !(t && etat.indiceCharge);
 }
 $("#i-chantier").addEventListener("change", remplirTypesIndice);
-$("#i-type").addEventListener("change", majInfoIndice);
+$("#i-type").addEventListener("change", () => majInfoIndice(true));
+$("#i-indice").addEventListener("input", () => majInfoIndice(false));
 $$("#onglet-indice .depot").forEach((label) => installerDepot(label, async (fichiers) => {
   const role = label.dataset.role;
   try {
@@ -907,16 +974,59 @@ $$("#onglet-indice .depot").forEach((label) => installerDepot(label, async (fich
   } catch { /* déjà signalé */ }
 }));
 async function calerIndice(forcer = false) {
+  if (!$("#i-indice").value.trim() && !confirm("Aucun nom d'indice : continuer quand même ?")) return;
   try {
     const r = await avecAttente("Calage du nouvel indice (contrôle, nettoyage, transformation)…", () => api("/api/indice", {
       chantier: $("#i-chantier").value, type_plan: $("#i-type").value, indice: $("#i-indice").value.trim(),
       forcer, ecarter_nouveaux: $("#ecarter-nouveaux").checked,
     }));
+    etat.indiceEnAttente = r.attente ? r : null;
     afficherRapport($("#resultat-indice"), r, false);
+    ajouterBoutonsValidation(r);
     etat.resultatIndice = r;
     montrerResultat(r);
-    chargerChantiers();
   } catch { /* déjà signalé */ }
+}
+function ajouterBoutonsValidation(r) {
+  if (!r.attente) return;
+  const nom = r.indice || "ce plan";
+  const bloc = document.createElement("div");
+  bloc.innerHTML = `<div class="etat-indice">Vérifiez la superposition à droite, puis :</div>
+    <div class="valider"><button class="vert" id="valider-indice">✔ Valider l'indice ${esc(nom)}</button>
+    <button id="abandonner-indice">Abandonner</button></div>`;
+  const cible = $("#resultat-indice");
+  cible.insertBefore(bloc, cible.querySelector(".bandeau").nextSibling);
+  $("#valider-indice").addEventListener("click", async () => {
+    if (r.rapport.mode === "forcé" && !confirm("Ce plan a été produit SANS contrôle. Le valider quand même ?")) return;
+    try {
+      const v = await avecAttente("Enregistrement de l'indice…", () => api("/api/indice/valider",
+        { chantier: r.chantier, type_plan: r.type_plan, attente: r.attente }));
+      etat.indiceEnAttente = null;
+      bloc.innerHTML = `<div class="bandeau identique">Indice ${esc(nom)} validé et enregistré</div>
+        <a class="telecharger" href="${v.telecharger}">Télécharger le DXF calé</a>
+        <p class="aide">Enregistré dans : ${esc(v.chemin_sortie)}</p>
+        <div class="boutons">${v.precedent ? `<button id="comparer-precedent">Voir les différences avec l'indice précédent</button>` : ""}
+        <button id="indice-suivant">Caler un autre indice</button></div>`;
+      if (v.precedent) $("#comparer-precedent").addEventListener("click", () => comparerIds([v.precedent, v.id], r.chantier));
+      $("#indice-suivant").addEventListener("click", reinitialiserIndice);
+      await chargerChantiers();
+      majInfoIndice(false);
+    } catch { /* déjà signalé */ }
+  });
+  $("#abandonner-indice").addEventListener("click", async () => {
+    try { await api("/api/indice/abandonner", { chantier: r.chantier, type_plan: r.type_plan, attente: r.attente }); }
+    catch (e) { toast(e.message); }
+    etat.indiceEnAttente = null;
+    reinitialiserIndice();
+    toast("Indice abandonné : rien n'a été enregistré.", true);
+  });
+}
+function reinitialiserIndice() {
+  etat.indiceCharge = false; etat.resultatIndice = null;
+  $$("#onglet-indice .depot").forEach((l) => { l.classList.remove("charge"); l.querySelector(".etat").textContent = ""; });
+  $("#resultat-indice").innerHTML = `<p class="aide">Le résultat s'affichera ici. Rien n'est enregistré tant que vous n'avez pas cliqué « Valider ».</p>`;
+  majInfoIndice(true);
+  afficherVues("accueil", "Déposez le plan du nouvel indice à gauche.");
 }
 $("#caler-indice").addEventListener("click", () => calerIndice(false));
 
@@ -927,15 +1037,37 @@ function remplirArbre() {
   if (avant && etat.chantiers.some((c) => c.nom === avant)) sc.value = avant;
   const ch = etat.chantiers.find((c) => c.nom === sc.value);
   const coches = new Set($$("#arbre input:checked").map((i) => i.value));
-  $("#arbre").innerHTML = !ch ? "" : (ch.types.map((t) => `<div class="type">${esc(t.type)}</div>` + (t.indices.length ? t.indices.map((i) =>
+  $("#arbre").innerHTML = !ch ? "" : (ch.types.map((t) => `<div class="type">${esc(t.type)}
+      <span class="ajout-indice" data-type="${esc(t.type)}">+ nouvel indice</span></div>` + (t.indices.length ? t.indices.map((i) =>
     `<label><input type="checkbox" value="${esc(i.id)}" ${coches.has(i.id) ? "checked" : ""}> ${esc(i.indice || i.plan)}
       <small>${esc((i.date || "").replace("T", " ").slice(0, 16))}${i.mode && i.mode !== "identique" ? " · " + esc(i.mode) : ""}</small>
       <a href="/telecharger_indice?id=${encodeURIComponent(i.id)}" title="Télécharger le DXF calé">DXF</a></label>`).join("")
-    : `<p class="aide">aucun indice calé</p>`)).join("") || `<p class="aide">Aucun plan calé pour ce chantier.</p>`);
+    : `<p class="aide">aucun indice calé</p>`)).join("") || `<p class="aide">Aucun plan calé pour ce chantier.</p>`)
+    + (ch ? `<p><span class="ajout-indice" id="ajout-type">+ caler un nouveau type de plan sur ce chantier</span></p>` : "");
   $$("#arbre input").forEach((i) => i.addEventListener("change", majBoutonsComparer));
+  const at = $("#ajout-type");
+  if (at) at.addEventListener("click", async () => {
+    const chantier = $("#c-chantier").value;
+    nouveauPlan(false);
+    $("#chantier").value = chantier; majTypesProposes();
+    try {   // la référence du chantier est reprise automatiquement
+      await avecAttente("Lecture de la référence du chantier…", async () => {
+        const r = await api("/api/reference_chantier", { chantier });
+        apresOuverture("ref", $('.depot[data-role="ref"]'), r);
+      });
+    } catch { /* déjà signalé */ }
+    $("#type-plan").focus();
+  });
+  $$("#arbre .ajout-indice[data-type]").forEach((a) => a.addEventListener("click", () => {
+    const chantier = $("#c-chantier").value, type = a.dataset.type;
+    changerOnglet("indice");
+    $("#i-chantier").value = chantier; remplirTypesIndice();
+    $("#i-type").value = type; majInfoIndice(true);
+  }));
   majBoutonsComparer();
 }
 $("#c-chantier").addEventListener("change", remplirArbre);
+$("#c-nouveau-chantier").addEventListener("click", () => nouveauPlan(false));
 function majBoutonsComparer() {
   const n = $$("#arbre input:checked").length;
   $("#superposer").disabled = n < 1;
@@ -962,9 +1094,17 @@ $("#superposer").addEventListener("click", async () => {
     requestAnimationFrame(() => vUnique.ajuster(r.calques[0].geometrie.emprise));
   } catch { /* déjà signalé */ }
 });
-$("#differences").addEventListener("click", async () => {
+$("#differences").addEventListener("click", () => differences($$("#arbre input:checked").map((i) => i.value)));
+async function comparerIds(ids, chantier) {
+  changerOnglet("chantiers");
+  $("#c-chantier").value = chantier; remplirArbre();
+  $$("#arbre input").forEach((c) => (c.checked = ids.includes(c.value)));
+  majBoutonsComparer();
+  await differences(ids);
+}
+async function differences(idsBruts) {
   // l'ordre : le plus ancien d'abord (les identifiants commencent par la date)
-  const ids = $$("#arbre input:checked").map((i) => i.value).sort((a, b) => a.split("/")[2].localeCompare(b.split("/")[2]));
+  const ids = [...idsBruts].sort((a, b) => a.split("/")[2].localeCompare(b.split("/")[2]));
   try {
     const r = await avecAttente("Comparaison des deux plans…", () => api("/api/comparer", { ids, mode: "differences" }));
     vUnique.vider();
@@ -987,7 +1127,7 @@ $("#differences").addEventListener("click", async () => {
     const emp = (r.inchanges || r.ajoutes || r.supprimes).emprise;
     requestAnimationFrame(() => vUnique.ajuster(emp));
   } catch { /* déjà signalé */ }
-});
+}
 
 // boutons « Tout voir »
 $$("[data-ajuster]").forEach((b) => b.addEventListener("click", () => {

@@ -19,7 +19,6 @@ FAMILLES_SUPPRIMABLES = {
     "Cotations": ["DIMENSION", "ARC_DIMENSION", "LARGE_RADIAL_DIMENSION", "TOLERANCE"],
     "Lignes de repère": ["MULTILEADER", "MLEADER", "LEADER"],
     "Attributs de blocs": ["ATTDEF", "ATTRIB"],
-    "Hachures": ["HATCH"],
     "Textes": ["TEXT", "MTEXT"],
     "Surfaces pleines": ["SOLID", "TRACE", "3DFACE"],
     "Points": ["POINT"],
@@ -36,10 +35,13 @@ def construire_recette(chemin_plan, plan_lu, elements, calage,
                        calques_gardes: list[str], types_supprimes: list[str], prefixe: str,
                        zone_polygone=None, nom_reference: str | None = None,
                        renommages: dict | None = None, chantier: str | None = None,
-                       type_plan: str | None = None) -> Recette:
+                       type_plan: str | None = None, hachures: str = "garder") -> Recette:
     """calage : ResultatCalage ; calques_gardes : noms (accents corrects) ; zone en MN95."""
     chemin_plan = Path(chemin_plan)
     renommages = renommages or {}
+    if hachures not in ("garder", "contour", "supprimer"):
+        raise ValueError(f"mode de hachures inconnu : {hachures}")
+    types_supprimes = list(types_supprimes) + (["HATCH"] if hachures == "supprimer" else [])
     sim = calage.similitude
     compte = {}
     for el in elements:
@@ -90,6 +92,7 @@ def construire_recette(chemin_plan, plan_lu, elements, calage,
             "calques_ecartes": ecartes,
             "calques_renommes": dict(renommages),
             "types_supprimes": sorted(set(types_supprimes)),
+            "hachures": hachures,      # "garder", "contour" (polyligne du contour) ou "supprimer"
             "types_supprimes_par_calque": {},
             "calques_nouveaux": "garder",
         },

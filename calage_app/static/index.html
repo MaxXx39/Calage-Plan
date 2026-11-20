@@ -90,6 +90,13 @@
           <label class="champ">Préfixe des calques <input id="prefixe" type="text"></label>
           <h3>Supprimer</h3>
           <div id="familles"></div>
+          <div id="bloc-hachures" hidden>
+            <h3>Hachures <small id="nb-hachures"></small></h3>
+            <label class="case"><input type="radio" name="hachures" value="garder" checked> Garder telles quelles</label>
+            <label class="case"><input type="radio" name="hachures" value="contour"> Contour seulement
+              <small>(polyligne du bord : plus léger, lisible partout)</small></label>
+            <label class="case"><input type="radio" name="hachures" value="supprimer"> Supprimer</label>
+          </div>
           <h3>Calques <small id="compte-calques"></small></h3>
           <p class="aide">Cliquez un objet sur la vue : <b>tout son calque</b> est sélectionné.</p>
           <div class="boutons petits">
@@ -127,15 +134,17 @@
           <label class="champ">Chantier <select id="i-chantier"></select></label>
           <label class="champ">Type de plan <select id="i-type"></select></label>
           <p class="aide" id="i-info"></p>
+          <div id="i-historique"></div>
         </div>
       </div>
       <div class="etape ouverte">
-        <h2><span class="num">2</span> Nouvel indice</h2>
+        <h2><span class="num">2</span> Caler le nouvel indice</h2>
         <div class="contenu">
-          <label class="champ">Indice <small>(facultatif)</small> <input id="i-indice" placeholder="ex. B"></label>
+          <label class="champ">Nom de l'indice <input id="i-indice" placeholder="ex. B"></label>
+          <p class="aide" id="i-avert-indice"></p>
           <label class="depot" data-role="indice">
             <input type="file" accept=".dxf,.dwg" hidden>
-            <b>Plan du nouvel indice</b><span>DWG ou DXF</span>
+            <b>Plan du nouvel indice</b><span>DWG ou DXF reçu de l'architecte / ingénieur</span>
             <em class="etat"></em>
           </label>
           <label class="depot petit" data-role="indice_xref">
@@ -149,8 +158,9 @@
         </div>
       </div>
       <div class="etape ouverte">
-        <h2><span class="num">3</span> Résultat</h2>
-        <div class="contenu"><div id="resultat-indice"><p class="aide">—</p></div></div>
+        <h2><span class="num">3</span> Vérifier et valider</h2>
+        <div class="contenu"><div id="resultat-indice"><p class="aide">Le résultat s'affichera ici. Rien n'est
+          enregistré tant que vous n'avez pas cliqué « Valider ».</p></div></div>
       </div>
     </section>
 
@@ -160,6 +170,7 @@
         <h2>Plans calés</h2>
         <div class="contenu">
           <label class="champ">Chantier <select id="c-chantier"></select></label>
+          <button id="c-nouveau-chantier">+ Nouveau chantier</button>
           <p class="aide">Cochez des plans puis choisissez : superposer (plans de types différents)
             ou voir les différences entre 2 indices.</p>
           <div id="arbre"></div>

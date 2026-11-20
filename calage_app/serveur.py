@@ -111,11 +111,16 @@ def fabriquer_gestionnaire(session: Session):
                 if url.path == "/api/exporter":
                     return self._json(session.exporter(
                         d["chantier"], d["type_plan"], d.get("indice", ""), d.get("prefixe", ""),
-                        d["calques"], d.get("familles", []), d.get("zone"), d.get("renommages")))
+                        d["calques"], d.get("familles", []), d.get("zone"), d.get("renommages"),
+                        d.get("hachures", "garder")))
                 if url.path == "/api/indice":
                     return self._json(session.caler_indice(
                         d["chantier"], d["type_plan"], d.get("indice", ""), bool(d.get("forcer")),
                         bool(d.get("ecarter_nouveaux"))))
+                if url.path == "/api/indice/valider":
+                    return self._json(session.valider_indice(d["chantier"], d["type_plan"], d["attente"]))
+                if url.path == "/api/indice/abandonner":
+                    return self._json(session.abandonner_indice(d["chantier"], d["type_plan"], d["attente"]))
                 if url.path == "/api/comparer":
                     return self._json(session.comparer(d["ids"], d.get("mode", "superposer")))
                 return self._json({"erreur": "introuvable"}, 404)

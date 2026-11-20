@@ -159,6 +159,17 @@ def test_serveur_parcours_complet(serveur, plan_b_decale):
     _post(f"{serveur}/api/fichier?role=indice&nom=plan_B.dxf", octets=plan_b_decale.read_bytes())
     i = _post(serveur + "/api/indice", {"chantier": "Chantier A", "type_plan": "Terrassement", "indice": "B"})
     assert i["rapport"]["mode"] == "recalé" and "reference" in i
+    # rien n'est enregistré avant validation
+    assert len(_get(serveur + "/api/chantiers")["chantiers"][0]["types"][0]["indices"]) == 1
+    assert "attente" in i and "telecharger" not in i
+    v = _post(serveur + "/api/indice/valider", {"chantier": "Chantier A", "type_plan": "Terrassement",
+                                                "attente": i["attente"]})
+    assert v["indice"] == "B" and v["precedent"] and urllib.request.urlopen(serveur + v["telecharger"]).read()
+    # un indice calé puis abandonné ne laisse aucune trace
+    _post(f"{serveur}/api/fichier?role=indice&nom=plan_C.dxf", octets=plan_b_decale.read_bytes())
+    i2 = _post(serveur + "/api/indice", {"chantier": "Chantier A", "type_plan": "Terrassement", "indice": "C"})
+    _post(serveur + "/api/indice/abandonner", {"chantier": "Chantier A", "type_plan": "Terrassement",
+                                               "attente": i2["attente"]})
     indices = _get(serveur + "/api/chantiers")["chantiers"][0]["types"][0]["indices"]
     assert [x["indice"] for x in indices] == ["B", "A"]
     # différences A -> B : les 8 lignes ajoutées sont trouvées. (Les 5 polylignes supprimées du
@@ -185,3 +196,25 @@ def test_serveur_parcours_complet(serveur, plan_b_decale):
     # erreurs lisibles
     err = _post(serveur + "/api/indice", {"chantier": "inexistant", "type_plan": "x"})
     assert "introuvable" in err["erreur"]
+
+
+def test_hachures_en_contour(plan_a_doc, dossier):
+    """Mode « contour seulement » : aucune hachure dans le DXF, des polylignes à la place."""
+    import ezdxf
+    plan = lire_plan(PLAN_A)
+    elems = exploser_document(plan.doc).elements
+    cal = calage_par_points([P1, P2], [P3])
+    gardes = sorted({e.calque for e in elems})
+    sorties = {}
+    for mode in ("garder", "contour", "supprimer"):
+        rec = construire_recette(PLAN_A, plan, elems, cal, gardes, ["DIMENSION", "MULTILEADER"], "",
+                                 hachures=mode)
+        chemin = dossier / f"recette_hachures_{mode}.json"
+        rec.enregistrer(chemin)
+        rap = appliquer(PLAN_A, chemin, dossier / f"hachures_{mode}.dxf")
+        msp = ezdxf.readfile(dossier / f"hachures_{mode}.dxf").modelspace()
+        sorties[mode] = (len(msp.query("HATCH")), len(msp.query("LWPOLYLINE")), rap)
+    assert sorties["garder"][0] > 50
+    assert sorties["contour"][0] == 0 and sorties["supprimer"][0] == 0
+    assert sorties["contour"][1] > sorties["supprimer"][1] + 50       # les contours remplacent les hachures
+    assert any("contour" in i for i in sorties["contour"][2].infos)

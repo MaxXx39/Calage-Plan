@@ -43,8 +43,13 @@ et à mesure : chaque nouveau type saisi est ensuite proposé) dans `~/CalagePla
    Annuler / Ctrl+Z, touche Suppr) ; types à supprimer ; préfixe ; zone à garder.
 4. *Résultat* : DXF calé (R2000, mètres, blocs éclatés) + recette enregistrée.
 
-**Nouvel indice** : chantier, type de plan, dépôt du plan. Contrôle de concordance (rejeu, recalage
-automatique signalé, ou refus), nettoyage et calage rejoués.
+   Hachures : garder, **contour seulement** (polyligne du bord) ou supprimer.
+   À la fin : « Caler un autre plan sur ce chantier » ou « Nouveau chantier ».
+
+**Nouvel indice** : chantier, type de plan (historique des indices, lettre suivante proposée),
+dépôt du plan, « Caler ». Contrôle de concordance (rejeu, recalage automatique signalé, ou refus).
+**Rien n'est enregistré avant « Valider l'indice »** (ou « Abandonner ») ; ensuite : téléchargement
+et différences avec l'indice précédent en un clic.
 
 **Chantiers et comparaison** : liste des indices calés (téléchargement), **superposition** de plans
 (types différents, couleurs distinctes) et **différences** entre deux indices (nouveau / supprimé).

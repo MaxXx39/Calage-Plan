@@ -202,3 +202,13 @@ button.secondaire small { display: block; color: var(--doux); font-size: 11.5px;
 #liste-auto .type { font-weight: 600; margin: 6px 0 2px; }
 #liste-auto .case { margin: 2px 0 2px 6px; font-size: 12.5px; }
 #liste-auto small { color: var(--doux); }
+
+#bloc-hachures small { color: var(--doux); font-size: 11.5px; }
+#i-historique { margin-top: 6px; font-size: 12.5px; }
+#i-historique ol { margin: 4px 0; padding-left: 18px; }
+#i-historique li small { color: var(--doux); }
+.valider { display: flex; gap: 6px; margin: 8px 0; }
+.valider button { flex: 1; padding: 9px; font-weight: 600; }
+button.vert { background: var(--vert); border-color: var(--vert); color: #fff; }
+.etat-indice { padding: 9px 10px; border-radius: 8px; background: var(--accent-clair); color: #163f7d; font-size: 13px; margin: 6px 0; }
+#arbre .ajout-indice { font-size: 11.5px; margin-left: 8px; font-weight: normal; color: var(--accent); cursor: pointer; text-decoration: underline; }
