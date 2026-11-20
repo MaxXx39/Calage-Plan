@@ -5,7 +5,15 @@ Le calage et le nettoyage de l'indice A sont faits une fois à la main ; l'outil
 d'origine et le DXF final, en déduit une **recette** (`recette.json`) et la rejoue sur les
 indices B, C, D…
 
-## Installation
+## Installation sous Windows
+
+1. Installer **Python** (3.11 ou plus) depuis python.org — cocher « Add python.exe to PATH ».
+2. Installer **ODA File Converter** (gratuit, opendesign.com) pour lire les DWG.
+3. Télécharger ce dépôt (bouton « Code » → « Download ZIP »), le décompresser dans un dossier fixe.
+4. Double-cliquer **Installer.bat** (une seule fois).
+5. Double-cliquer **Calage.bat** pour ouvrir l'appli.
+
+## Installation (autres systèmes)
 
 ```bash
 pip install -e .[test]

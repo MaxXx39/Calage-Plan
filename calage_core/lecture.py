@@ -52,10 +52,34 @@ def _empreinte(chemin: Path) -> str:
     return h.hexdigest()
 
 
+def _chercher_oda_windows() -> str | None:
+    """Sous Windows, ODA s'installe dans un dossier qui porte son numéro de version
+    (« C:\\Program Files\\ODA\\ODAFileConverter 26.4.0 ») : on prend le plus récent.
+    La variable d'environnement CALAGE_ODA permet d'indiquer le chemin à la main."""
+    import glob
+    import platform
+    if platform.system() != "Windows":
+        return None
+    manuel = os.environ.get("CALAGE_ODA")
+    if manuel and Path(manuel).is_file():
+        return manuel
+    trouves = []
+    for base in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                 os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+        trouves += glob.glob(os.path.join(base, "ODA", "ODAFileConverter*", "ODAFileConverter.exe"))
+    return sorted(trouves)[-1] if trouves else None
+
+
 def _odafc_disponible() -> bool:
     try:
         from ezdxf.addons import odafc
-        return bool(odafc.is_installed())
+        if odafc.is_installed():
+            return True
+        chemin = _chercher_oda_windows()
+        if chemin:
+            ezdxf.options.set("odafc-addon", "win_exec_path", f'"{chemin}"')
+            return bool(odafc.is_installed())
+        return False
     except Exception:
         return False
 
