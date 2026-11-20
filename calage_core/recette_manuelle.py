@@ -59,7 +59,8 @@ def construire_recette(chemin_plan, plan_lu, elements, calage,
         zone = {"polygone_mn95": poly,
                 "emprise_mn95": [float(arr[:, 0].min()), float(arr[:, 1].min()),
                                  float(arr[:, 0].max()), float(arr[:, 1].max())],
-                "marge_m": 0.0}
+                "marge_m": 0.0,
+                "decouper": True}       # les traits sont coupés au bord de la zone
 
     ancres = _choisir_ancres(elements, set(calques_gardes), sim.echelle)
 

@@ -109,6 +109,37 @@ def ecart_element(el: dict, sim: Similitude) -> dict:
     return {"ecart_m": max(dist), "ecart_angle_deg": round(ang, 4)}
 
 
+def _verifier_axes_seuls(segments) -> None:
+    """Avec des axes seuls, l'échelle n'est connue que si les axes ne passent pas tous par un
+    même point : il en faut au moins 3 (ex. 2 parallèles + 1 perpendiculaire, ou 4 axes d'une trame)."""
+    if len(segments) < 3:
+        raise ErreurCalage("Avec des axes seulement, il en faut au moins 3 (par exemple 2 axes "
+                           "parallèles et 1 perpendiculaire) — ou ajoutez un point.")
+    s = np.asarray(segments, float)
+    ang = np.degrees(np.arctan2(s[:, 3] - s[:, 1], s[:, 2] - s[:, 0])) % 180
+    ecart = np.abs(((ang - ang[0]) + 90) % 180 - 90)
+    if ecart.max() < 0.5:
+        raise ErreurCalage("Les axes sont tous parallèles : ajoutez un axe perpendiculaire ou un point.")
+    etendue = float(np.ptp(s.reshape(-1, 2), axis=0).max()) or 1.0
+    inters = []
+    for i in range(len(s)):
+        for j in range(i + 1, len(s)):
+            x1, y1, x2, y2 = s[i]; x3, y3, x4, y4 = s[j]
+            den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+            if abs(den) < 1e-9 * etendue ** 2:
+                inters = None   # une paire parallèle (non confondue) suffit à fixer l'échelle
+                break
+            t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den
+            inters.append((x1 + t * (x2 - x1), y1 + t * (y2 - y1)))
+        if inters is None:
+            break
+    if inters is not None:
+        p = np.asarray(inters)
+        if np.ptp(p, axis=0).max() < 1e-3 * etendue:
+            raise ErreurCalage("Les axes se croisent tous au même point : l'échelle n'est pas "
+                               "déterminée. Ajoutez un axe parallèle à l'un d'eux, ou un point.")
+
+
 def calage_mixte(elements: list[dict], arrondir_echelle: bool = True) -> ResultatCalage:
     """elements = [{"type": "point"|"axe", "role": "calage"|"controle", "plan": [...], "ref": [...]}]."""
     cal = [e for e in elements if e.get("role", "calage") == "calage"]
@@ -117,12 +148,9 @@ def calage_mixte(elements: list[dict], arrondir_echelle: bool = True) -> Resulta
         raise ErreurCalage("Aucun élément de calage.")
     nb_pts = sum(e["type"] == "point" for e in cal)
     nb_axes = sum(e["type"] == "axe" for e in cal)
-    if nb_pts == 0 and nb_axes >= 2:
-        # Deux axes fixent l'origine et l'orientation, mais l'échelle reste libre
-        # (numériquement presque indéterminée) : on exige un point.
-        raise ErreurCalage("Deux axes ne suffisent pas (l'échelle n'est pas déterminée) : "
-                           "ajoutez un point de calage.")
-    if nb_pts + nb_axes < 2:
+    if nb_pts == 0:
+        _verifier_axes_seuls([e["plan"] for e in cal])
+    if nb_pts and nb_pts + nb_axes < 2:
         raise ErreurCalage("Il faut au moins 2 éléments de calage (2 points, ou 1 point et 1 axe…).")
     A, B = [], []
     for e in cal:
@@ -135,9 +163,6 @@ def calage_mixte(elements: list[dict], arrondir_echelle: bool = True) -> Resulta
     sv = np.linalg.svd(An, compute_uv=False) if len(An) >= 4 else np.zeros(4)
     if len(An) < 4 or sv[-1] < 1e-8 * sv[0]:
         nb_axes = sum(e["type"] == "axe" for e in cal)
-        if nb_axes >= 2 and not any(e["type"] == "point" for e in cal):
-            raise ErreurCalage("Deux axes ne suffisent pas (l'échelle n'est pas déterminée) : "
-                               "ajoutez un point de calage.")
         raise ErreurCalage("Calage indéterminé : il faut 2 points, ou 1 point et 1 axe, "
                            "ou 2 axes et 1 point (axes non parallèles, points distincts).")
     sol, *_ = np.linalg.lstsq(An, B, rcond=None)
@@ -175,20 +200,24 @@ def _verdict(res: ResultatCalage, arrondir_echelle=True) -> None:
     interne = max(res.ecarts_calage) if res.ecarts_calage else 0.0
     if not ctrl:
         res.verdict = "sans contrôle"
-        res.message = "Aucun élément de contrôle : la qualité du calage n'est pas vérifiée."
+        res.message = ("Pas de vérification : cliquez un point de plus sur les deux plans pour "
+                       "savoir si le calage est juste.")
         if interne > SEUIL_VERT:
             res.message += f" Écart entre les éléments de calage : {interne * 100:.1f} cm."
     else:
         pire = max(ctrl)
         if pire < SEUIL_VERT:
-            res.verdict, res.message = "bon", f"Contrôle à {pire * 1000:.0f} mm : calage bon."
+            res.verdict = "bon"
+            res.message = (f"Vérification : le point tombe à {pire * 1000:.0f} mm de sa place. "
+                           "Le calage est juste.")
         elif pire < SEUIL_ORANGE:
             res.verdict = "à vérifier"
-            res.message = f"Contrôle à {pire * 100:.1f} cm : à vérifier (clic imprécis ?)."
+            res.message = (f"Vérification : le point tombe à {pire * 100:.1f} cm de sa place. "
+                           "À revoir (clic imprécis ?).")
         else:
             res.verdict = "mauvais"
-            res.message = (f"Contrôle à {pire:.2f} m : calage FAUX. Vérifiez que les éléments "
-                           "cliqués sont bien les mêmes sur les deux plans.")
+            res.message = (f"Vérification : le point tombe à {pire:.2f} m de sa place. Le calage est "
+                           "FAUX : les éléments cliqués ne sont pas les mêmes sur les deux plans.")
     if arrondir_echelle and not res.echelle_arrondie:
         res.message += f" Échelle {res.echelle_brute:.6g} : pas une puissance de 10 (unités inhabituelles ?)."
     elif res.echelle_arrondie and interne > SEUIL_VERT and ctrl:

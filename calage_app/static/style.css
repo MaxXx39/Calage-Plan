@@ -212,3 +212,44 @@ button.secondaire small { display: block; color: var(--doux); font-size: 11.5px;
 button.vert { background: var(--vert); border-color: var(--vert); color: #fff; }
 .etat-indice { padding: 9px 10px; border-radius: 8px; background: var(--accent-clair); color: #163f7d; font-size: 13px; margin: 6px 0; }
 #arbre .ajout-indice { font-size: 11.5px; margin-left: 8px; font-weight: normal; color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+/* ------------------------------------------------------------------ v3 : navigation par chantier */
+#ariane { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #c8d3ea; }
+#ariane a { color: #fff; text-decoration: none; padding: 4px 8px; border-radius: 6px; background: #2b3d66; }
+#ariane a:hover { background: #3a5089; }
+#ariane span.sep { color: #7f8db0; }
+#ariane span.courant { color: #fff; font-weight: 600; padding: 4px 2px; }
+.titre-ecran { font-size: 18px; margin: 4px 2px 10px; }
+.carte { background: var(--carte); border: 1px solid var(--bord); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.carte h3 { margin-top: 2px; }
+.carte-chantier { cursor: pointer; }
+.carte-chantier:hover, .carte-plan.active { border-color: var(--accent); background: #fbfcff; }
+.carte-chantier b, .carte-plan .nom-plan { font-size: 15px; }
+.carte-chantier small, .carte-plan small { color: var(--doux); display: block; margin-top: 2px; font-size: 12px; }
+.carte-plan .actions { display: flex; gap: 6px; margin: 8px 0 4px; flex-wrap: wrap; }
+.carte-plan .actions button, .carte-plan .actions a.bouton { padding: 5px 10px; font-size: 13px; }
+a.bouton { display: inline-block; border: 1px solid var(--bord); border-radius: 6px; color: var(--texte); text-decoration: none; background: #fff; }
+a.bouton:hover { border-color: var(--accent); }
+button.nouvel-indice { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+.historique { font-size: 12.5px; margin-top: 4px; }
+.historique summary { cursor: pointer; color: var(--accent); }
+.historique .ligne { display: flex; align-items: center; gap: 6px; padding: 3px 0 3px 4px; border-bottom: 1px solid #f0f1f4; }
+.historique .ligne:last-child { border-bottom: 0; }
+.historique .ligne small { display: inline; margin: 0; }
+.historique .ligne .droite { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.historique a { color: var(--accent); font-size: 12px; }
+.lien-discret { color: var(--doux); font-size: 12px; cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; }
+.lien-discret:hover { color: var(--rouge); }
+.badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 9px; background: #eef0f3; color: var(--doux); margin-left: 4px; }
+.badge.recale, .badge.force { background: var(--orange-clair); color: var(--orange); }
+.badge.gele { background: #e7eefb; color: #3a5a9b; }
+.danger-zone { margin-top: 18px; text-align: center; }
+.danger-zone a { color: var(--doux); font-size: 12px; }
+.danger-zone a:hover { color: var(--rouge); }
+.explication { background: #fff; border: 1px dashed var(--bord); border-radius: 8px; padding: 7px 9px; }
+.mode-emploi { margin: 8px 0; }
+.mode-emploi summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.mode-emploi ol { padding-left: 18px; margin: 6px 0; }
+.mode-emploi li { margin-bottom: 4px; }
+#e-ajout .etape h2 { font-size: 14px; }
+.vide { color: var(--doux); font-size: 13px; padding: 8px 2px; }

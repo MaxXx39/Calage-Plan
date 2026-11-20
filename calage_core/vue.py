@@ -36,6 +36,19 @@ def _couleur_calque(doc, nom: str) -> str:
         return "#202020"
 
 
+def etat_calque(doc, nom: str) -> str:
+    """« gelé », « éteint » ou « » selon l'état du calque dans le fichier d'origine."""
+    try:
+        lay = doc.layers.get(nom)
+        if lay.is_frozen():
+            return "gelé"
+        if lay.is_off():
+            return "éteint"
+    except Exception:
+        pass
+    return ""
+
+
 def _texte(e):
     t = e.dxftype()
     try:
@@ -140,7 +153,8 @@ class PlanAffiche:
             "origine": [float(self.origine[0]), float(self.origine[1])],
             "emprise": self.emprise,
             "calques": [{"nom": c, "couleur": _couleur_calque(self.doc, c),
-                         "n": sum(self.compte[c].values()), "types": dict(self.compte[c])}
+                         "n": sum(self.compte[c].values()), "types": dict(self.compte[c]),
+                         "etat": etat_calque(self.doc, c)}
                         for c in self.calques],
             "types": self.types,
             "groupes": self.groupes,

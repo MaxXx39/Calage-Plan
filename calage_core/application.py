@@ -20,6 +20,24 @@ from .recette import UNITES_INSUNITS, Recette
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
 
+DECOUPABLES = {"LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", "ELLIPSE", "SPLINE"}
+
+
+def _points_trait(e, sim):
+    """Points (MN95) d'un trait, courbes aplaties à 1 mm. None si impossible."""
+    from ezdxf import path as ezpath
+    try:
+        if e.dxftype() == "POLYLINE" and not (e.is_2d_polyline or e.is_3d_polyline):
+            return None
+        ch = ezpath.make_path(e)
+        pts = np.array([(v.x, v.y) for v in ch.flattening(0.001 / sim.echelle)])
+        if len(pts) < 2:
+            return None
+        return sim.appliquer(pts)
+    except Exception:
+        return None
+
+
 def contours_hachure(hachure) -> list:
     """Polylignes (LWPOLYLINE) des contours d'une hachure, mêmes calque / couleur."""
     from ezdxf import path as ezpath
@@ -191,9 +209,16 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
     zone = recette.zone.get("emprise_mn95")
     marge = float(recette.zone.get("marge_m", 0))
     polygone = None
+    zone_decoupe = None
     if recette.zone.get("polygone_mn95"):
         from matplotlib.path import Path as MPath
+        from .decoupe import Zone
         polygone = MPath(np.asarray(recette.zone["polygone_mn95"], dtype=float))
+        if recette.zone.get("decouper", False):
+            zone_decoupe = Zone(recette.zone["polygone_mn95"])
+    nb_decoupes = 0
+    nouveaux_geles = Counter()
+    from .vue import etat_calque
     m = sim.matrice()
 
     exporteur = Exporteur(plan.doc)
@@ -208,6 +233,9 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
             ecartes_cpt[el.calque] += 1
             continue
         else:
+            if etat_calque(plan.doc, el.calque):        # calque nouveau mais gelé / éteint dans le plan
+                nouveaux_geles[el.calque] += 1
+                continue
             nouveaux[el.calque] += 1
             if ecarter_nouveaux:
                 continue
@@ -215,6 +243,22 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
         if t in types_supprimes or (cn in types_calque and t in types_calque[cn]):
             types_cpt[t] += 1
             continue
+        if zone_decoupe is not None and t in DECOUPABLES:
+            # traits : coupés exactement au bord de la zone
+            pts_m = _points_trait(el.entite, sim)
+            if pts_m is not None:
+                dedans = zone_decoupe.dedans(pts_m)
+                if dedans.all() and not zone_decoupe.traverse(pts_m):
+                    exporteur.ajouter(el.entite, m, sortie, el.calque)
+                    continue
+                morceaux = zone_decoupe.decouper(pts_m)
+                if not morceaux:
+                    hors_zone += 1
+                    continue
+                for mo in morceaux:
+                    exporteur.ajouter_polyligne(mo, sortie, el.calque, el.entite)
+                nb_decoupes += 1
+                continue
         if zone:
             pts = points_familles(el.entite)
             if pts:
@@ -263,6 +307,11 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
             f"{t} ({n})" for t, n in exporteur.non_transformables.items()))
     if nb_contours:
         rap.infos.append(f"{nb_contours} hachure(s) remplacée(s) par leur contour.")
+    if nb_decoupes:
+        rap.infos.append(f"{nb_decoupes} trait(s) coupé(s) au bord de la zone.")
+    if nouveaux_geles:
+        rap.infos.append("Calques nouveaux mais gelés ou éteints dans le plan, écartés : " + ", ".join(
+            f"« {c} » ({n})" for c, n in sorted(nouveaux_geles.items())))
     manuels = recette.ajouts_manuels.get("par_calque", {})
     if manuels:
         rap.infos.append("Rappel : éléments ajoutés à la main sur l'indice appris, NON rejoués : " +

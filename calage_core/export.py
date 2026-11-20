@@ -78,6 +78,21 @@ class Exporteur:
         self.compte_calques[calque_sortie] += 1
         return True
 
+    def ajouter_polyligne(self, points_mn95, calque_sortie: str, calque_source: str | None, modele=None):
+        """Ajoute une polyligne déjà en coordonnées MN95 (morceau d'un trait découpé)."""
+        attribs = {"layer": calque_sortie}
+        if modele is not None:
+            attribs["color"] = modele.dxf.get("color", 256)
+            lt = modele.dxf.get("linetype", "BYLAYER")
+            if lt in self.doc.linetypes or lt.upper() in ("BYLAYER", "BYBLOCK"):
+                attribs["linetype"] = lt
+            if modele.dxf.hasattr("lineweight"):
+                attribs["lineweight"] = modele.dxf.lineweight
+        self.assurer_calque(calque_sortie, calque_source)
+        self.msp.add_lwpolyline([(float(x), float(y)) for x, y in points_mn95], dxfattribs=attribs)
+        self.compte_types["LWPOLYLINE"] += 1
+        self.compte_calques[calque_sortie] += 1
+
     @staticmethod
     def _texte_depuis_attribut(att):
         """Un attribut isolé n'est pas valide hors bloc : on le convertit en TEXT."""

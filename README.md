@@ -29,30 +29,28 @@ python -m calage interface
 ```
 
 Une page s'ouvre dans le navigateur (servie sur 127.0.0.1 : aucun fichier ne quitte le poste).
-Les plans sont rangés **par chantier et par type de plan** (la liste des types se construit au fur
-et à mesure : chaque nouveau type saisi est ensuite proposé) dans `~/CalagePlans/chantiers/<chantier>/plans/<type>/`.
+Organisation : **Mes chantiers → un chantier → ses plans → leurs indices.**
 
-**Caler un nouveau plan** — une fois par type de plan :
-1. *Chantier et fichiers* : chantier, type de plan, indice ; référence MN95 (reprise automatiquement
-   si le chantier en a déjà une), plan à caler, xrefs éventuels.
-2. *Calage* : soit **Calage automatique** (cherche les éléments communs avec les plans calés du chantier
-   — n'importe quels indices, au choix dans « Comparer avec… » — et la référence ; niveau de confiance), soit à la main avec des **points** et/ou des
-   **axes** (ex. 2 axes + 1 point). L'accroche (sommet □, centre ○, intersection ×, ligne) s'affiche
-   avant le clic. Un élément de **contrôle** vérifie le calage (vert < 1 cm, orange < 5 cm, rouge).
-3. *Nettoyage* : un clic sur un objet sélectionne **tout son calque** (mode « Écarter au clic »,
-   Annuler / Ctrl+Z, touche Suppr) ; types à supprimer ; préfixe ; zone à garder.
-4. *Résultat* : DXF calé (R2000, mètres, blocs éclatés) + recette enregistrée.
+- **Mes chantiers** : la liste ; « + Nouveau chantier » = un nom + la référence MN95 du géomètre.
+- **Un chantier** : une carte par plan (ex. « Terrassement ingénieur ») avec « Nouvel indice reçu »,
+  « Télécharger le DXF », l'historique des indices (afficher, comparer, supprimer) et
+  « Supprimer ce plan ». « + Ajouter un plan à caler » ouvre l'assistant. Cocher 2 indices →
+  « Voir les différences ». Les suppressions vont dans `~/CalagePlans/corbeille/`.
+- **Ajouter un plan** (assistant) :
+  1. nom du plan, indice, fichier (+ xrefs) ;
+  2. caler : calage automatique (comparaison avec les plans du chantier, au choix) ou à la main avec
+     des points et/ou des axes (2 points, 1 point + 1 axe, 3 axes…). Accroche visible avant le clic.
+     La **vérification** est un point en plus, qui ne sert pas au calcul : s'il tombe à moins de 1 cm
+     de sa place, le calage est juste ;
+  3. nettoyer : un clic sur un objet = tout son calque (calques gelés/éteints du DWG écartés d'office),
+     types à supprimer, hachures (garder / contour / supprimer), zone à garder (les traits qui
+     dépassent sont **coupés** au bord), préfixe de calque ;
+  4. enregistrer : DXF calé (R2000, mètres, blocs éclatés) + recette.
+- **Nouvel indice reçu** : indice suivant proposé, dépôt du fichier, « Caler ». Contrôle de
+  concordance (même origine / recalé automatiquement / refus). **Rien n'est enregistré avant
+  « Enregistrer l'indice »** ; ensuite : téléchargement et « Voir ce qui a changé ».
 
-   Hachures : garder, **contour seulement** (polyligne du bord) ou supprimer.
-   À la fin : « Caler un autre plan sur ce chantier » ou « Nouveau chantier ».
-
-**Nouvel indice** : chantier, type de plan (historique des indices, lettre suivante proposée),
-dépôt du plan, « Caler ». Contrôle de concordance (rejeu, recalage automatique signalé, ou refus).
-**Rien n'est enregistré avant « Valider l'indice »** (ou « Abandonner ») ; ensuite : téléchargement
-et différences avec l'indice précédent en un clic.
-
-**Chantiers et comparaison** : liste des indices calés (téléchargement), **superposition** de plans
-(types différents, couleurs distinctes) et **différences** entre deux indices (nouveau / supprimé).
+Dossier de travail : `~/CalagePlans/chantiers/<chantier>/plans/<plan>/` (recette + indices).
 
 ## Ligne de commande
 

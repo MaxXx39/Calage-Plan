@@ -241,129 +241,231 @@ class Vue {
 
 // =========================================================================== état
 const etat = {
+  ecran: "accueil",
+  chantiers: [], typesExistants: [], chantier: null,     // chantier ouvert (nom)
+  coches: new Set(),                                     // indices affichés sur l'écran chantier
   geo: { ref: null, plan: null }, infos: {},
-  elements: [], calage: null, sim: null, auto: false,
+  elements: [], calage: null, sim: null, auto: false, etape: 1, vueSuperposee: false,
   gardes: new Set(), familles: [], zone: null, dessinZone: false,
   surligne: null, selection: null, modeEcarter: false, historique: [],
-  chantiers: [], typesSuggeres: [],
-  etape: 1, onglet: "projet",
+  typeIndice: null, indiceCharge: false,
 };
 const vPlan = new Vue($("#c-plan")), vRef = new Vue($("#c-ref")), vUnique = new Vue($("#c-unique"));
-const COUL_REF = "#a3a9b3", COUL_ROUGE = "#d62020", COUL_CAL = "#1f5fbf", COUL_CTRL = "#e07000";
+const COUL_REF = "#a3a9b3", COUL_ROUGE = "#d62020", COUL_CAL = "#1f5fbf", COUL_VERIF = "#e07000";
 const PALETTE = ["#d62020", "#1f5fbf", "#1b9e3b", "#9b30c9", "#e07000", "#0f9fb0", "#b5338a", "#5c6f00"];
+const dateCourte = (d) => (d || "").replace("T", " ").slice(0, 16);
 
 function afficherVues(mode, texteAccueil) {
   $("#accueil").hidden = mode !== "accueil";
   $("#vue-double").hidden = mode !== "double";
   $("#vue-unique").hidden = mode !== "unique";
   if (texteAccueil) $("#accueil-texte").innerHTML = texteAccueil;
+  $("#info-objet").hidden = true; $("#bulle").hidden = true;
   requestAnimationFrame(() => { vPlan.redim(); vRef.redim(); vUnique.redim(); });
 }
 
-// =========================================================================== onglets
-$$(".onglet").forEach((b) => b.addEventListener("click", () => changerOnglet(b.dataset.onglet)));
-function changerOnglet(o) {
-  etat.onglet = o;
-  $$(".onglet").forEach((x) => x.classList.toggle("actif", x.dataset.onglet === o));
-  for (const n of ["projet", "indice", "chantiers"]) $(`#onglet-${n}`).hidden = n !== o;
-  $("#info-objet").hidden = true; $("#bulle").hidden = true;
-  chargerChantiers();
-  if (o === "projet") {
-    if (etat.etape === 4 && etat.resultatProjet) montrerResultat(etat.resultatProjet);
-    else if (etat.etape >= 3 || (etat.etape === 2 && etat.vueSuperposee)) montrerSuperposition();
-    else afficherVues(etat.geo.plan || etat.geo.ref ? "double" : "accueil",
-      "Indiquez le <b>chantier</b>, puis déposez la <b>référence MN95</b> et le <b>plan à caler</b> à gauche.");
-  } else if (o === "indice") {
-    if (etat.resultatIndice) montrerResultat(etat.resultatIndice);
-    else afficherVues("accueil", "Choisissez le chantier et le type de plan, puis déposez le nouvel indice.");
-  } else {
-    afficherVues("accueil", "Cochez des plans calés à gauche pour les afficher ou les comparer.");
+// =========================================================================== navigation
+function aller(ecran) {
+  etat.ecran = ecran;
+  for (const e of ["accueil", "chantier", "ajout", "indice"]) $(`#e-${e}`).hidden = e !== ecran;
+  const ar = [`<a href="#" data-nav="accueil">Mes chantiers</a>`];
+  if (ecran !== "accueil" && etat.chantier) {
+    ar.push(`<span class="sep">›</span>`);
+    ar.push(ecran === "chantier" ? `<span class="courant">${esc(etat.chantier)}</span>` : `<a href="#" data-nav="chantier">${esc(etat.chantier)}</a>`);
   }
+  if (ecran === "ajout") ar.push(`<span class="sep">›</span><span class="courant">Ajouter un plan</span>`);
+  if (ecran === "indice") ar.push(`<span class="sep">›</span><span class="courant">Nouvel indice — ${esc(etat.typeIndice)}</span>`);
+  $("#ariane").innerHTML = ar.join("");
+  $$("#ariane a").forEach((a) => a.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    if (etat.ecran === "ajout" && etat.etape > 1 && etat.etape < 4 && !confirm("Quitter sans enregistrer ce plan ?")) return;
+    if (a.dataset.nav === "accueil") ouvrirAccueil(); else ouvrirChantier(etat.chantier);
+  }));
 }
 
-// =========================================================================== chantiers (données)
 async function chargerChantiers() {
-  try {
-    const r = await api("/api/chantiers");
-    etat.chantiers = r.chantiers; etat.typesSuggeres = r.types_existants;
-  } catch (e) { toast(e.message); return; }
-  $("#liste-chantiers").innerHTML = etat.chantiers.map((c) => `<option value="${esc(c.nom)}">`).join("");
-  majTypesProposes();
-  remplirSelectsIndice();
-  remplirArbre();
+  const r = await api("/api/chantiers");
+  etat.chantiers = r.chantiers;
+  etat.typesExistants = r.types_existants || [];
+  return r;
 }
-const chantierNomme = (nom) => etat.chantiers.find((c) => c.nom.toLowerCase() === (nom || "").trim().toLowerCase());
+const chantierCourant = () => etat.chantiers.find((c) => c.nom === etat.chantier);
 
-function majTypesProposes() {
-  const ch = chantierNomme($("#chantier").value);
-  const existants = ch ? ch.types.map((t) => t.type) : [];
-  const tous = [...new Set([...existants, ...etat.typesSuggeres])];
-  $("#liste-types").innerHTML = tous.map((t) => `<option value="${esc(t)}">`).join("");
-  const t = $("#type-plan").value.trim().toLowerCase();
-  $("#avert-type").innerHTML = ch && existants.some((x) => x.toLowerCase() === t)
-    ? "Ce type de plan existe déjà pour ce chantier : sa recette sera <b>remplacée</b> (l'ancienne est archivée). Pour un simple nouvel indice, utilisez l'onglet « Nouvel indice »."
-    : "";
-  const b = $("#ref-chantier");
-  if (ch && ch.reference) {
-    b.hidden = false;
-    b.textContent = `Utiliser la référence du chantier (${ch.reference})`;
-  } else b.hidden = true;
+// =========================================================================== MES CHANTIERS
+async function ouvrirAccueil() {
+  etat.chantier = null;
+  aller("accueil");
+  try { await chargerChantiers(); } catch (e) { toast(e.message); }
+  const liste = [...etat.chantiers].sort((a, b) => (b.derniere_activite || "").localeCompare(a.derniere_activite || "") || a.nom.localeCompare(b.nom));
+  $("#cartes-chantiers").innerHTML = liste.length ? liste.map((c) => {
+    const nbIndices = c.types.reduce((n, t) => n + t.indices.length, 0);
+    return `<div class="carte carte-chantier" data-chantier="${esc(c.nom)}"><b>${esc(c.nom)}</b>
+      <small>${c.types.length} plan(s) · ${nbIndices} indice(s)${c.derniere_activite ? " · dernier le " + esc(dateCourte(c.derniere_activite)) : ""}</small></div>`;
+  }).join("") : `<p class="vide">Aucun chantier pour l'instant. Commencez par en créer un.</p>`;
+  $$(".carte-chantier").forEach((c) => c.addEventListener("click", () => ouvrirChantier(c.dataset.chantier)));
+  $("#form-chantier").hidden = true;
+  $("#btn-nouveau-chantier").hidden = false;
+  afficherVues("accueil", liste.length ? "Choisissez un chantier à gauche, ou créez-en un nouveau." : "Créez votre premier chantier : un nom et la référence MN95 du géomètre.");
 }
-$("#chantier").addEventListener("input", majTypesProposes);
-$("#type-plan").addEventListener("input", majTypesProposes);
-$("#ref-chantier").addEventListener("click", async () => {
+
+$("#btn-nouveau-chantier").addEventListener("click", () => {
+  $("#form-chantier").hidden = false; $("#btn-nouveau-chantier").hidden = true;
+  $("#nc-nom").value = ""; const d = $("#nc-depot"); d.classList.remove("charge"); d.querySelector(".etat").textContent = "";
+  etat.refNouveauChantier = false; majBoutonCreer();
+  $("#nc-nom").focus();
+});
+$("#nc-annuler").addEventListener("click", () => { $("#form-chantier").hidden = true; $("#btn-nouveau-chantier").hidden = false; afficherVues("accueil"); });
+$("#nc-nom").addEventListener("input", majBoutonCreer);
+function majBoutonCreer() { $("#nc-creer").disabled = !($("#nc-nom").value.trim() && etat.refNouveauChantier); }
+installerDepot($("#nc-depot"), async (fichiers) => {
   try {
-    await avecAttente("Lecture de la référence du chantier…", async () => {
-      const r = await api("/api/reference_chantier", { chantier: $("#chantier").value });
-      apresOuverture("ref", $('.depot[data-role="ref"]'), r);
+    await avecAttente("Lecture de la référence…", async () => {
+      await televerser("ref", fichiers[0]);
+      const r = await api("/api/ouvrir", { role: "ref" });
+      etat.geo.ref = r.geometrie;
+      $("#nc-depot").classList.add("charge");
+      $("#nc-depot .etat").textContent = `${r.nom} — ${r.nb_entites} objets`;
+      etat.refNouveauChantier = true; majBoutonCreer();
+      montrerGeo([{ geo: r.geometrie, couleur: () => "#3a3f47" }], "Référence du nouveau chantier", r.geometrie.emprise);
     });
   } catch { /* déjà signalé */ }
 });
+$("#nc-creer").addEventListener("click", async () => {
+  try {
+    const r = await avecAttente("Création du chantier…", () => api("/api/chantier/creer", { nom: $("#nc-nom").value }));
+    await ouvrirChantier(r.chantier);
+    toast("Chantier créé. Ajoutez maintenant un premier plan à caler.", true);
+  } catch { /* déjà signalé */ }
+});
 
-// Recommencer : un autre plan du même chantier (référence gardée) ou un nouveau chantier
-function nouveauPlan(memeChantier, type = "") {
-  changerOnglet("projet");
-  etat.geo.plan = null; etat.infos.plan = null; etat.resultatProjet = null;
-  etat.familles = []; etat.zone = null; etat.historique = []; etat.selection = null;
-  reinitialiserCalage();
-  $("#type-plan").value = type; $("#indice").value = "";
-  for (const role of ["plan", "xref"]) {
-    const l = $(`.depot[data-role="${role}"]`);
-    l.classList.remove("charge"); l.querySelector(".etat").textContent = "";
-  }
-  if (!memeChantier) {
-    $("#chantier").value = "";
-    etat.geo.ref = null; etat.infos.ref = null;
-    const l = $('.depot[data-role="ref"]');
-    l.classList.remove("charge"); l.querySelector(".etat").textContent = "";
-  }
-  $("#alertes-fichiers").innerHTML = "";
-  $("#resultat-export").innerHTML = "";
-  $("#vers-calage").disabled = true;
-  majTypesProposes();
-  ouvrirEtape(1);
-  preparerVuesDoubles();
-  afficherVues(etat.geo.ref ? "double" : "accueil",
-    "Indiquez le <b>chantier</b>, puis déposez la <b>référence MN95</b> et le <b>plan à caler</b> à gauche.");
-  if (etat.geo.ref) requestAnimationFrame(() => vRef.ajuster(etat.geo.ref.emprise));
-  (memeChantier ? $("#type-plan") : $("#chantier")).focus();
+// =========================================================================== UN CHANTIER
+async function ouvrirChantier(nom, cocherDerniers = true) {
+  etat.chantier = nom;
+  aller("chantier");
+  try { await chargerChantiers(); } catch (e) { toast(e.message); return; }
+  const ch = chantierCourant();
+  if (!ch) { ouvrirAccueil(); return; }
+  if (cocherDerniers) etat.coches = new Set(ch.types.filter((t) => t.indices.length).map((t) => t.indices[0].id));
+  afficherChantier();
+  majVueChantier();
 }
 
-// =========================================================================== étapes
-function ouvrirEtape(n) {
-  $$("#onglet-projet .etape").forEach((e) => {
-    const k = +e.dataset.etape;
-    e.classList.toggle("ouverte", k === n); e.classList.toggle("faite", k < n);
-  });
-  etat.etape = n;
-  $("#info-objet").hidden = true;
+function afficherChantier() {
+  const ch = chantierCourant();
+  $("#ch-nom").textContent = ch.nom;
+  $("#ch-ref").innerHTML = `Référence MN95 : <b>${esc(ch.reference || "aucune")}</b>
+    <button class="lien-discret" id="ch-changer-ref">changer</button>`;
+  $("#ch-changer-ref").addEventListener("click", () => $("#ch-nouvelle-ref").click());
+  $("#cartes-plans").innerHTML = ch.types.length ? ch.types.map((t, k) => {
+    const d = t.indices[0];
+    const badge = (m) => m && m !== "identique" ? `<span class="badge ${m === "recalé" ? "recale" : "force"}">${esc(m)}</span>` : "";
+    const lignes = t.indices.map((i) => `<div class="ligne">
+        <input type="checkbox" class="coche-indice" value="${esc(i.id)}" ${etat.coches.has(i.id) ? "checked" : ""}>
+        <b>${esc(i.indice || i.plan)}</b> <small>${esc(dateCourte(i.date))}</small>${badge(i.mode)}
+        <span class="droite"><a href="/telecharger_indice?id=${encodeURIComponent(i.id)}">DXF</a>
+        <button class="lien-discret suppr-indice" data-id="${esc(i.id)}" data-nom="${esc(i.indice || i.plan)}" data-type="${esc(t.type)}" title="Supprimer cet indice">supprimer</button></span></div>`).join("");
+    return `<div class="carte carte-plan">
+      <span class="nom-plan"><b>${esc(t.type)}</b></span>
+      <small>${d ? `Dernier indice : <b>${esc(d.indice || d.plan)}</b> du ${esc(dateCourte(d.date))}` : "Aucun indice"}${d ? badge(d.mode) : ""}</small>
+      <div class="actions">
+        <button class="nouvel-indice" data-type="${esc(t.type)}">Nouvel indice reçu</button>
+        ${d ? `<a class="bouton" href="/telecharger_indice?id=${encodeURIComponent(d.id)}">Télécharger le DXF</a>` : ""}
+      </div>
+      <details class="historique" ${t.indices.length > 1 ? "" : ""}><summary>Historique (${t.indices.length} indice${t.indices.length > 1 ? "s" : ""})</summary>${lignes}</details>
+      <button class="lien-discret suppr-plan" data-type="${esc(t.type)}">Supprimer ce plan</button>
+    </div>`;
+  }).join("") : `<p class="vide">Aucun plan calé sur ce chantier. Cliquez « Ajouter un plan à caler ».</p>`;
+  $$(".nouvel-indice").forEach((b) => b.addEventListener("click", () => ouvrirIndice(b.dataset.type)));
+  $$(".coche-indice").forEach((c) => c.addEventListener("change", () => {
+    c.checked ? etat.coches.add(c.value) : etat.coches.delete(c.value);
+    majVueChantier();
+  }));
+  $$(".suppr-indice").forEach((b) => b.addEventListener("click", () => supprimer(
+    `Supprimer l'indice « ${b.dataset.nom} » du plan « ${b.dataset.type} » ?`, { id: b.dataset.id })));
+  $$(".suppr-plan").forEach((b) => b.addEventListener("click", () => supprimer(
+    `Supprimer le plan « ${b.dataset.type} » avec sa recette et TOUS ses indices ?`, { type_plan: b.dataset.type })));
+  $("#btn-differences").disabled = etat.coches.size !== 2;
 }
-$$("#onglet-projet .etape h2").forEach((h) => h.addEventListener("click", () => {
-  const e = h.parentElement, n = +e.dataset.etape;
-  if (!e.classList.contains("faite")) return;
-  ouvrirEtape(n);
-  if (n <= 2) montrerCoteACote(); else if (n === 3) montrerSuperposition();
-}));
+
+async function supprimer(question, quoi) {
+  if (!confirm(question + "\n\n(Rien n'est effacé définitivement : l'élément part dans la corbeille du dossier CalagePlans.)")) return;
+  try {
+    await api("/api/supprimer", { chantier: etat.chantier, ...quoi });
+    toast("Supprimé (placé dans la corbeille).", true);
+    if (!quoi.id && !quoi.type_plan) ouvrirAccueil();
+    else { if (quoi.id) etat.coches.delete(quoi.id); ouvrirChantier(etat.chantier, false); }
+  } catch (e) { toast(e.message); }
+}
+$("#ch-supprimer").addEventListener("click", (ev) => {
+  ev.preventDefault();
+  supprimer(`Supprimer TOUT le chantier « ${etat.chantier} » (référence, plans, indices) ?`, {});
+});
+$("#ch-nouvelle-ref").addEventListener("change", async (ev) => {
+  const f = ev.target.files[0]; ev.target.value = "";
+  if (!f || !confirm(`Remplacer la référence du chantier par « ${f.name} » ?`)) return;
+  try {
+    await avecAttente("Lecture de la nouvelle référence…", async () => {
+      await televerser("ref", f);
+      await api("/api/chantier/reference", { chantier: etat.chantier });
+    });
+    toast("Référence remplacée.", true);
+    ouvrirChantier(etat.chantier, false);
+  } catch { /* déjà signalé */ }
+});
+$("#btn-ajouter-plan").addEventListener("click", ouvrirAjout);
+
+// Affichage : référence + indices cochés, chacun dans sa couleur
+async function majVueChantier() {
+  $("#btn-differences").disabled = etat.coches.size !== 2;
+  const ids = [...etat.coches];
+  try {
+    const r = await api("/api/comparer", { ids, mode: "superposer", chantier: etat.chantier });
+    const couches = [];
+    let leg = "";
+    if (r.reference) { couches.push({ geo: r.reference, couleur: () => "#c4c8cf", textes: false }); leg += `<div><i style="background:#c4c8cf"></i> Référence</div>`; }
+    r.calques.forEach((c, k) => {
+      const coul = PALETTE[k % PALETTE.length];
+      couches.push({ geo: c.geometrie, couleur: () => coul });
+      leg += `<div><i style="background:${coul}"></i> ${esc(c.nom)}</div>`;
+    });
+    $("#legende").innerHTML = leg;
+    if (!couches.length) { afficherVues("accueil", "Ce chantier n'a pas encore de référence."); return; }
+    const emp = r.calques.length ? r.calques[0].geometrie.emprise : r.reference.emprise;
+    montrerGeo(couches, r.calques.length ? "Plans calés sur la référence" : "Référence du chantier", emp);
+  } catch (e) { toast(e.message); }
+}
+
+function montrerGeo(couches, titre, emprise) {
+  vUnique.vider();
+  vUnique.origine = couches[0].geo.origine;
+  couches.forEach((c) => vUnique.ajouterCouche(c));
+  $("#titre-unique").textContent = titre;
+  $("#case-couleurs").hidden = true;
+  afficherVues("unique");
+  requestAnimationFrame(() => vUnique.ajuster(emprise));
+}
+
+$("#btn-differences").addEventListener("click", async () => {
+  const ids = [...etat.coches].sort((a, b) => a.split("/")[2].localeCompare(b.split("/")[2]));   // plus ancien d'abord
+  try {
+    const r = await avecAttente("Comparaison des deux indices…", () => api("/api/comparer", { ids, mode: "differences" }));
+    const couches = [];
+    if (r.reference) couches.push({ geo: r.reference, couleur: () => "#dadde2", textes: false });
+    if (r.inchanges) couches.push({ geo: r.inchanges, couleur: () => "#7b818c" });
+    if (r.supprimes) couches.push({ geo: r.supprimes, couleur: () => "#d62020", epaisseur: 2 });
+    if (r.ajoutes) couches.push({ geo: r.ajoutes, couleur: () => "#12a33a", epaisseur: 2 });
+    const lignes = Object.entries(r.par_calque).slice(0, 15).map(([c, v]) =>
+      `<tr><td>${esc(c)}</td><td style="color:#12a33a">+${v.ajoutes}</td><td style="color:#d62020">−${v.supprimes}</td></tr>`).join("");
+    $("#legende").innerHTML = `<p><b>Ce qui a changé entre ${esc(r.ancien)} et ${esc(r.nouveau)}</b></p>
+      <div><i style="background:#12a33a"></i> Nouveau ou déplacé : ${r.compte.ajoutes}</div>
+      <div><i style="background:#d62020"></i> Supprimé ou déplacé : ${r.compte.supprimes}</div>
+      <div><i style="background:#7b818c"></i> Inchangé : ${r.compte.inchanges}</div>
+      ${lignes ? `<table>${lignes}</table>` : ""}
+      <button class="lien-discret" id="retour-superposition">revenir à l'affichage normal</button>`;
+    $("#retour-superposition").addEventListener("click", majVueChantier);
+    montrerGeo(couches, `Différences ${r.ancien} → ${r.nouveau}`, (r.inchanges || r.ajoutes || r.supprimes).emprise);
+  } catch { /* déjà signalé */ }
+});
 
 // =========================================================================== dépôt de fichiers
 function installerDepot(label, auDepot) {
@@ -377,8 +479,61 @@ function installerDepot(label, auDepot) {
   });
 }
 const televerser = (role, f) => api(`/api/fichier?role=${role}&nom=${encodeURIComponent(f.name)}`, f);
+function viderDepot(label) { label.classList.remove("charge"); label.querySelector(".etat").textContent = ""; }
 
-$$("#onglet-projet .depot").forEach((label) => installerDepot(label, async (fichiers) => {
+// =========================================================================== AJOUTER UN PLAN
+async function ouvrirAjout() {
+  aller("ajout");
+  // remise à zéro de l'assistant
+  etat.geo.plan = null; etat.infos = {}; etat.familles = []; etat.zone = null; etat.historique = [];
+  etat.selection = null; etat.dessinZone = false;
+  reinitialiserCalage();
+  $("#type-plan").value = ""; $("#indice").value = "A";
+  viderDepot($('#e-ajout .depot[data-role="plan"]')); viderDepot($('#e-ajout .depot[data-role="xref"]'));
+  $("#alertes-fichiers").innerHTML = ""; $("#resultat-export").innerHTML = "";
+  $("#vers-calage").disabled = true;
+  $("#effacer-zone").disabled = true; $("#dessiner-zone").textContent = "Dessiner la zone"; $("#dessiner-zone").classList.remove("actif");
+  majTypesProposes();
+  ouvrirEtape(1);
+  try {   // la référence du chantier
+    const r = await avecAttente("Lecture de la référence du chantier…", () => api("/api/reference_chantier", { chantier: etat.chantier }));
+    etat.geo.ref = r.geometrie; etat.infos.ref = r;
+  } catch { return; }
+  preparerVuesDoubles();
+  montrerCoteACote();
+  requestAnimationFrame(() => vRef.ajuster(etat.geo.ref.emprise));
+  $("#type-plan").focus();
+}
+
+function majTypesProposes() {
+  const ch = chantierCourant();
+  const existants = ch ? ch.types.map((t) => t.type) : [];
+  $("#liste-types").innerHTML = etat.typesExistants.filter((t) => !existants.includes(t)).map((t) => `<option value="${esc(t)}">`).join("");
+  const t = $("#type-plan").value.trim().toLowerCase();
+  $("#avert-type").innerHTML = existants.some((x) => x.toLowerCase() === t)
+    ? "Ce plan existe déjà sur ce chantier : il sera <b>recalé</b> et sa recette remplacée. Pour une simple nouvelle version, utilisez plutôt « Nouvel indice reçu »."
+    : "";
+  majBoutonContinuer();
+}
+function majBoutonContinuer() { $("#vers-calage").disabled = !($("#type-plan").value.trim() && etat.geo.plan); }
+$("#type-plan").addEventListener("input", majTypesProposes);
+
+function ouvrirEtape(n) {
+  $$("#e-ajout .etape").forEach((e) => {
+    const k = +e.dataset.etape;
+    e.classList.toggle("ouverte", k === n); e.classList.toggle("faite", k < n);
+  });
+  etat.etape = n;
+  $("#info-objet").hidden = true;
+}
+$$("#e-ajout .etape > h2").forEach((h) => h.addEventListener("click", () => {
+  const e = h.parentElement, n = +e.dataset.etape;
+  if (!e.classList.contains("faite") || etat.etape === 4) return;
+  ouvrirEtape(n);
+  if (n <= 2) montrerCoteACote(); else if (n === 3) montrerSuperposition();
+}));
+
+$$("#e-ajout .depot").forEach((label) => installerDepot(label, async (fichiers) => {
   const role = label.dataset.role;
   try {
     await avecAttente("Lecture du plan (conversion, liaison des xrefs, explosion des blocs)…", async () => {
@@ -386,66 +541,43 @@ $$("#onglet-projet .depot").forEach((label) => installerDepot(label, async (fich
         for (const f of fichiers) await televerser("xref", f);
         label.querySelector(".etat").textContent = fichiers.map((f) => f.name).join(", ");
         label.classList.add("charge");
-        if (etat.geo.plan) apresOuverture("plan", $('.depot[data-role="plan"]'), await api("/api/ouvrir", { role: "plan" }));
+        if (etat.geo.plan) apresOuverturePlan(await api("/api/ouvrir", { role: "plan" }));
       } else {
-        await televerser(role, fichiers[0]);
-        apresOuverture(role, label, await api("/api/ouvrir", { role }));
+        await televerser("plan", fichiers[0]);
+        apresOuverturePlan(await api("/api/ouvrir", { role: "plan" }));
       }
     });
   } catch { /* déjà signalé */ }
 }));
 
-function apresOuverture(role, label, r) {
-  etat.geo[role] = r.geometrie; etat.infos[role] = r;
+function apresOuverturePlan(r) {
+  etat.geo.plan = r.geometrie; etat.infos.plan = r;
+  const label = $('#e-ajout .depot[data-role="plan"]');
   label.classList.add("charge");
   label.querySelector(".etat").textContent = `${r.nom} — ${r.nb_entites} objets, unité : ${r.unite}`;
-  if (role === "plan") {
-    reinitialiserCalage();
-    etat.gardes = new Set(r.geometrie.calques.map((c) => c.nom));
-    etat.zone = null; etat.historique = []; etat.familles = [];
-    const base = r.nom.replace(/\.[^.]+$/, "");
-    $("#prefixe").value = `DWG_${base} - `;
-  }
+  reinitialiserCalage();
+  // calques gelés ou éteints dans le DWG : décochés d'office
+  etat.gardes = new Set(r.geometrie.calques.filter((c) => !c.etat).map((c) => c.nom));
+  etat.zone = null; etat.historique = []; etat.familles = [];
+  const base = r.nom.replace(/\.[^.]+$/, "");
+  $("#prefixe").value = `DWG_${base} - `;
+  if (!$("#type-plan").value.trim()) $("#type-plan").value = "";
   const al = [];
-  for (const k of ["ref", "plan"]) {
-    const inf = etat.infos[k];
-    if (!inf) continue;
-    for (const a of inf.alertes) al.push(`<div class="alerte">${esc(a)}</div>`);
-    for (const x of inf.xrefs) if (!x.statut.startsWith("VIDE"))
-      al.push(`<div class="info">Xref « ${esc(x.nom)} » : ${esc(x.statut)} (${x.nb_entites} objets)</div>`);
-  }
+  for (const a of r.alertes) al.push(`<div class="alerte">${esc(a)}</div>`);
+  for (const x of r.xrefs) if (!x.statut.startsWith("VIDE"))
+    al.push(`<div class="info">Xref « ${esc(x.nom)} » : ${esc(x.statut)} (${x.nb_entites} objets)</div>`);
+  const geles = r.geometrie.calques.filter((c) => c.etat).length;
+  if (geles) al.push(`<div class="info">${geles} calque(s) gelé(s) ou éteint(s) dans le fichier : ils seront écartés (modifiable au nettoyage).</div>`);
   $("#alertes-fichiers").innerHTML = al.join("");
-  $("#vers-calage").disabled = !(etat.geo.ref && etat.geo.plan);
+  majBoutonContinuer();
   preparerVuesDoubles();
   montrerCoteACote();
-  requestAnimationFrame(() => { if (role === "plan") vPlan.ajuster(etat.geo.plan.emprise); else vRef.ajuster(etat.geo.ref.emprise); });
+  requestAnimationFrame(() => vPlan.ajuster(etat.geo.plan.emprise));
 }
 
-$("#vers-calage").addEventListener("click", () => {
-  if (!$("#chantier").value.trim() || !$("#type-plan").value.trim()) {
-    toast("Indiquez le chantier et le type de plan (ils servent à ranger la recette).", true);
-    return;
-  }
-  ouvrirEtape(2); afficherElements(); montrerCoteACote(); remplirChoixAuto();
-});
+$("#vers-calage").addEventListener("click", () => { ouvrirEtape(2); afficherElements(); montrerCoteACote(); remplirChoixAuto(); });
 
-// Plans avec lesquels le calage automatique se compare : n'importe quel indice calé du chantier
-function remplirChoixAuto() {
-  const ch = chantierNomme($("#chantier").value);
-  let h = `<label class="case"><input type="checkbox" id="auto-ref" checked> Référence MN95</label>`;
-  const avecIndices = ch ? ch.types.filter((t) => t.indices.length) : [];
-  for (const t of avecIndices) {
-    h += `<div class="type">${esc(t.type)}</div>` + t.indices.map((i, k) =>
-      `<label class="case"><input type="checkbox" class="auto-id" value="${esc(i.id)}" ${k === 0 ? "checked" : ""}>
-        ${esc(i.indice || i.plan)} <small>${esc((i.date || "").replace("T", " ").slice(0, 16))}</small></label>`).join("");
-  }
-  h += avecIndices.length
-    ? `<p class="aide">Par défaut : le dernier indice de chaque type. Cochez ceux que vous voulez.</p>`
-    : `<p class="aide">Aucun autre plan calé sur ce chantier pour l'instant : comparaison avec la référence seule (souvent insuffisant).</p>`;
-  $("#liste-auto").innerHTML = h;
-}
-
-// =========================================================================== calage
+// --------------------------------------------------------------------------- calage
 function reinitialiserCalage() {
   etat.elements = [
     { type: "point", role: "calage", plan: null, ref: null },
@@ -454,6 +586,7 @@ function reinitialiserCalage() {
   ];
   etat.calage = null; etat.sim = null; etat.auto = false;
   $("#resultat-calage").innerHTML = ""; $("#bandeau-auto").innerHTML = "";
+  $("#vers-nettoyage").disabled = true; $("#voir-superposition").disabled = true;
 }
 function preparerVuesDoubles() {
   for (const [v, role] of [[vPlan, "plan"], [vRef, "ref"]]) {
@@ -468,16 +601,17 @@ function preparerVuesDoubles() {
 function montrerCoteACote() {
   etat.vueSuperposee = false;
   $("#voir-cote-a-cote").hidden = true; $("#voir-superposition").hidden = false;
-  afficherVues(etat.geo.plan || etat.geo.ref ? "double" : "accueil");
+  afficherVues("double");
 }
+const nomRole = (el) => (el.role === "controle" ? "vérification" : "calage");
 const etiquette = (i) => {
   const el = etat.elements[i];
-  return `${i + 1}${el.type === "axe" ? " axe" : ""}${el.role === "controle" ? " (contrôle)" : ""}`;
+  return el.role === "controle" ? `${i + 1} vérif.` : `${i + 1}${el.type === "axe" ? " axe" : ""}`;
 };
 function majMarques() {
   vPlan.marques = []; vRef.marques = []; vPlan.traits = []; vRef.traits = [];
   etat.elements.forEach((el, i) => {
-    const coul = el.role === "controle" ? COUL_CTRL : COUL_CAL;
+    const coul = el.role === "controle" ? COUL_VERIF : COUL_CAL;
     for (const [v, cote] of [[vPlan, "plan"], [vRef, "ref"]]) {
       const pt = el[cote];
       if (!pt) continue;
@@ -497,11 +631,11 @@ function afficherElements() {
     let ecart = "";
     if (el.plan && el.ref && ecarts) {
       const e = ecarts[iComplet++];
-      if (e) ecart = `<span class="ecart">écart ${fmt(e.ecart_m * 1000, 0)} mm${e.ecart_angle_deg != null ? `, angle ${fmt(e.ecart_angle_deg, 3)}°` : ""}</span>`;
+      if (e) ecart = `<span class="ecart">${el.role === "controle" ? "tombe à" : "écart"} ${fmt(e.ecart_m * 1000, 0)} mm${e.ecart_angle_deg != null ? `, angle ${fmt(e.ecart_angle_deg, 3)}°` : ""}</span>`;
     }
     return `<li class="${i === prochain ? "courant" : ""}"><span class="idx">${i + 1}</span>
       <select data-type="${i}"><option value="point" ${el.type === "point" ? "selected" : ""}>Point</option><option value="axe" ${el.type === "axe" ? "selected" : ""}>Axe</option></select>
-      <span><button class="role ${el.role}" data-role="${i}" title="Cliquer pour changer">${el.role === "controle" ? "contrôle" : "calage"}</button></span>
+      <span><button class="role ${el.role}" data-role="${i}" title="Cliquer pour passer de calage à vérification">${nomRole(el)}</button></span>
       ${puce(el.plan, "plan")}${puce(el.ref, "réf.")}<button class="effacer" data-effacer="${i}" title="Effacer (ou supprimer la ligne si vide)">✕</button>${ecart}</li>`;
   }).join("");
   ol.querySelectorAll("[data-type]").forEach((s) => s.addEventListener("change", () => {
@@ -517,14 +651,23 @@ function afficherElements() {
   }));
 }
 function apresModif() { afficherElements(); majMarques(); calculerCalage(); }
-$("#ajout-point").addEventListener("click", () => { etat.elements.push({ type: "point", role: "calage", plan: null, ref: null }); apresModif(); });
-$("#ajout-axe").addEventListener("click", () => { etat.elements.push({ type: "axe", role: "calage", plan: null, ref: null }); apresModif(); });
+function ajouterElement(type, role) {
+  // insérée avant les vérifications pour garder la liste lisible
+  const el = { type, role, plan: null, ref: null };
+  if (role === "calage") {
+    const i = etat.elements.findIndex((e) => e.role === "controle");
+    i < 0 ? etat.elements.push(el) : etat.elements.splice(i, 0, el);
+  } else etat.elements.push(el);
+  apresModif();
+}
+$("#ajout-point").addEventListener("click", () => ajouterElement("point", etat.auto ? "controle" : "calage"));
+$("#ajout-axe").addEventListener("click", () => ajouterElement("axe", etat.auto ? "controle" : "calage"));
+$("#ajout-verif").addEventListener("click", () => ajouterElement("point", "controle"));
 
-// --- accroche au survol (requêtes limitées : une à la fois, la dernière position gagne)
 const survolEnCours = { plan: false, ref: false }, survolSuivant = { plan: null, ref: null };
 function elementCourant(cote) { return etat.elements.find((e) => !e[cote]); }
 async function demanderSurvol(cote, vue, x, y) {
-  if (etat.etape !== 2 || etat.onglet !== "projet") { vue.survol = null; return; }
+  if (etat.ecran !== "ajout" || etat.etape !== 2) { vue.survol = null; return; }
   const el = elementCourant(cote);
   if (!el) { if (vue.survol) { vue.survol = null; vue.dessiner(); } return; }
   if (survolEnCours[cote]) { survolSuivant[cote] = [x, y]; return; }
@@ -543,9 +686,9 @@ vPlan.surSortie = () => { vPlan.survol = null; vPlan.dessiner(); };
 vRef.surSortie = () => { vRef.survol = null; vRef.dessiner(); };
 
 async function cliquerElement(cote, vue, x, y) {
-  if (etat.etape !== 2) return;
+  if (etat.ecran !== "ajout" || etat.etape !== 2) return;
   const el = elementCourant(cote);
-  if (!el) { toast("Tous les éléments sont saisis sur ce plan : ajoutez une ligne (+ Point / + Axe) ou effacez-en un.", true); return; }
+  if (!el) { toast("Tous les éléments sont saisis sur ce plan : ajoutez une ligne (+ Point / + Axe / + Vérification) ou effacez-en un.", true); return; }
   let pt;
   try {
     const r = await api("/api/accroche", { role: cote, x, y, rayon: 14 / vue.k, mode: el.type });
@@ -554,7 +697,7 @@ async function cliquerElement(cote, vue, x, y) {
       pt = { segment: r.segment, genre: "axe" };
     } else if (r.aucun) {
       pt = { x, y, genre: "libre" };
-      toast("Aucun sommet ni intersection sous le curseur : point pris tel quel (zoomez pour plus de précision).", true);
+      toast("Aucun coin ni croisement sous le curseur : point pris tel quel (zoomez pour plus de précision).", true);
     } else pt = r;
   } catch (e) { toast(e.message); return; }
   el[cote] = pt;
@@ -566,9 +709,7 @@ vRef.surClic = (x, y) => cliquerElement("ref", vRef, x, y);
 
 function elementsPourServeur() {
   return etat.elements.filter((e) => e.plan && e.ref).map((e) => ({
-    type: e.type, role: e.role,
-    plan: e.plan.segment || [e.plan.x, e.plan.y],
-    ref: e.ref.segment || [e.ref.x, e.ref.y],
+    type: e.type, role: e.role, plan: e.plan.segment || [e.plan.x, e.plan.y], ref: e.ref.segment || [e.ref.x, e.ref.y],
   }));
 }
 async function calculerCalage() {
@@ -581,8 +722,7 @@ async function calculerCalage() {
     return;
   }
   try {
-    const r = await api("/api/calage", { elements: els, auto: etat.auto });
-    afficherResultatCalage(r);
+    afficherResultatCalage(await api("/api/calage", { elements: els, auto: etat.auto }));
   } catch (e) {
     etat.calage = null; etat.sim = null;
     $("#resultat-calage").innerHTML = `<div class="verdict mauvais">${esc(e.message)}</div>`;
@@ -594,40 +734,46 @@ function afficherResultatCalage(r) {
   const cls = { "bon": "bon", "à vérifier": "averifier", "mauvais": "mauvais", "sans contrôle": "sanscontrole" }[r.verdict];
   const ech = r.echelle_arrondie ? `${r.echelle} <small>(mesurée ${Number(r.echelle_brute).toPrecision(6)})</small>` : Number(r.echelle_brute).toPrecision(6);
   $("#resultat-calage").innerHTML = `<div class="verdict ${cls}"><b>${esc(r.message)}</b>
-    <table>
-      <tr><td>Échelle</td><td>${ech}</td></tr>
+    <table><tr><td>Échelle</td><td>${ech}</td></tr>
       <tr><td>Rotation</td><td>${fmt(r.rotation_deg, 4)}°</td></tr>
-      <tr><td>Translation</td><td>E ${fmt(r.translation[0])} / N ${fmt(r.translation[1])}</td></tr>
-    </table></div>`;
+      <tr><td>Translation</td><td>E ${fmt(r.translation[0])} / N ${fmt(r.translation[1])}</td></tr></table></div>`;
   afficherElements();
   $("#vers-nettoyage").disabled = false; $("#voir-superposition").disabled = false;
   if (etat.vueSuperposee) montrerSuperposition();
 }
 
-// --- calage automatique
+function remplirChoixAuto() {
+  const ch = chantierCourant();
+  let h = `<label class="case"><input type="checkbox" id="auto-ref" checked> Référence MN95</label>`;
+  const avecIndices = ch ? ch.types.filter((t) => t.indices.length) : [];
+  for (const t of avecIndices) {
+    h += `<div class="type">${esc(t.type)}</div>` + t.indices.map((i, k) =>
+      `<label class="case"><input type="checkbox" class="auto-id" value="${esc(i.id)}" ${k === 0 ? "checked" : ""}>
+        ${esc(i.indice || i.plan)} <small>${esc(dateCourte(i.date))}</small></label>`).join("");
+  }
+  h += avecIndices.length ? `<p class="aide">Par défaut : le dernier indice de chaque plan.</p>`
+    : `<p class="aide">Aucun autre plan calé sur ce chantier : comparaison avec la référence seule (souvent insuffisant).</p>`;
+  $("#liste-auto").innerHTML = h;
+}
 $("#calage-auto").addEventListener("click", async () => {
   try {
-    const r = await avecAttente("Recherche des éléments communs avec les plans du chantier…",
-      () => api("/api/calage_auto", {
-        chantier: $("#chantier").value,
-        ids: $$("#liste-auto .auto-id:checked").map((c) => c.value),
-        avec_reference: $("#auto-ref") ? $("#auto-ref").checked : true,
-      }));
+    const r = await avecAttente("Recherche des éléments communs…", () => api("/api/calage_auto", {
+      chantier: etat.chantier, ids: $$("#liste-auto .auto-id:checked").map((c) => c.value),
+      avec_reference: $("#auto-ref") ? $("#auto-ref").checked : true,
+    }));
     etat.auto = true;
     const c = r.confiance;
     const cls = { forte: "bon", moyenne: "averifier", faible: "mauvais" }[c.niveau];
     $("#bandeau-auto").innerHTML = `<div class="verdict ${cls}"><b>Calage automatique — confiance ${c.niveau.toUpperCase()}</b>
       <table><tr><td>Comparé avec</td><td>${esc(c.compare_avec.join(", "))}</td></tr>
-      <tr><td>Points concordants</td><td>${c.points_concordants} (écart moyen ${fmt(c.ecart_moyen_mm, 1)} mm)</td></tr></table>
-      <p class="aide">Les éléments cliqués servent maintenant de <b>contrôle</b> : cliquez au moins un point sur les deux plans pour vérifier.</p>
+      <tr><td>Points communs</td><td>${c.points_concordants} (écart moyen ${fmt(c.ecart_moyen_mm, 1)} mm)</td></tr></table>
+      <p class="aide">Pour être sûr : cliquez un point de <b>vérification</b> sur les deux plans.</p>
       <button id="quitter-auto">Revenir au calage à la main</button></div>`;
-    $("#quitter-auto").addEventListener("click", () => { etat.auto = false; $("#bandeau-auto").innerHTML = ""; etat.elements.forEach((e) => (e.role = "calage")); etat.elements[etat.elements.length - 1].role = "controle"; apresModif(); });
-    etat.elements.forEach((e) => (e.role = "controle"));
+    $("#quitter-auto").addEventListener("click", () => { etat.auto = false; $("#bandeau-auto").innerHTML = ""; reinitialiserCalage(); afficherElements(); majMarques(); });
+    etat.elements = [{ type: "point", role: "controle", plan: null, ref: null }];
     afficherResultatCalage(r);
-    afficherElements(); majMarques();
-    if (c.niveau !== "faible") montrerSuperposition();
-    else toast("Calage automatique incertain : calez à la main.", false);
-    calculerCalage();
+    majMarques();
+    if (c.niveau !== "faible") montrerSuperposition(); else toast("Calage automatique incertain : calez à la main.");
   } catch { /* déjà signalé */ }
 });
 
@@ -639,7 +785,7 @@ function montrerSuperposition() {
   vUnique.ajouterCouche({ geo: etat.geo.ref, couleur: () => COUL_REF, textes: false });
   vUnique.ajouterCouche({ geo: etat.geo.plan, sim: etat.sim, couleur: couleurPlanSuperpose, epaisseurDe: (g) => (g.l === etat.surligne || g.l === etat.selection ? 2.5 : 1) });
   if (etat.zone) vUnique.zone = etat.zone;
-  $("#titre-unique").textContent = etat.etape >= 3 ? "Nettoyage — plan calé sur la référence (gris)" : "Superposition — plan calé sur la référence (gris)";
+  $("#titre-unique").textContent = etat.etape >= 3 ? "Nettoyage — plan calé sur la référence (gris)" : "Plan calé sur la référence (gris)";
   $("#case-couleurs").hidden = false;
   $("#voir-cote-a-cote").hidden = etat.etape !== 2; $("#voir-superposition").hidden = true;
   afficherVues("unique");
@@ -650,19 +796,21 @@ $("#voir-cote-a-cote").addEventListener("click", montrerCoteACote);
 
 $("#vers-nettoyage").addEventListener("click", async () => {
   const r = etat.calage;
-  if (r.verdict === "mauvais" && !confirm("Le contrôle indique un calage FAUX. Continuer quand même ?")) return;
-  if (r.verdict === "sans contrôle" && !confirm("Aucun contrôle : le calage n'est pas vérifié. Continuer quand même ?")) return;
+  if (r.verdict === "mauvais" && !confirm("La vérification indique un calage FAUX. Continuer quand même ?")) return;
+  if (r.verdict === "sans contrôle" && !confirm("Pas de point de vérification : vous n'êtes pas sûr que le calage soit juste. Continuer quand même ?")) return;
   ouvrirEtape(3);
   await preparerNettoyage();
   montrerSuperposition();
 });
 
-// =========================================================================== nettoyage
+// --------------------------------------------------------------------------- nettoyage
 function typesSupprimes() {
   const s = new Set();
   for (const f of etat.familles) if (f.coche) f.types.forEach((t) => s.add(t));
   return s;
 }
+const modeHachures = () => ($('input[name="hachures"]:checked') || { value: "garder" }).value;
+$$('input[name="hachures"]').forEach((r) => r.addEventListener("change", () => vUnique.dessiner()));
 function couleurPlanSuperpose(g) {
   const geo = etat.geo.plan, nom = geo.calques[g.l].nom;
   if (etat.etape >= 3) {
@@ -677,9 +825,6 @@ function couleurPlanSuperpose(g) {
 $("#couleurs-calques").addEventListener("change", () => vUnique.dessiner());
 $("#voir-ecartes").addEventListener("change", () => vUnique.dessiner());
 
-const modeHachures = () => ($('input[name="hachures"]:checked') || { value: "garder" }).value;
-$$('input[name="hachures"]').forEach((r) => r.addEventListener("change", () => vUnique.dessiner()));
-
 async function preparerNettoyage() {
   if (!etat.familles.length) {
     const r = await api("/api/familles");
@@ -690,6 +835,8 @@ async function preparerNettoyage() {
   $("#familles").innerHTML = etat.familles.map((f, i) =>
     `<label><input type="checkbox" data-famille="${i}" ${f.coche ? "checked" : ""}> ${esc(f.libelle)} <small>(${f.n})</small></label>`).join("");
   $$("#familles input").forEach((c) => c.addEventListener("change", () => { etat.familles[+c.dataset.famille].coche = c.checked; vUnique.dessiner(); }));
+  const geles = etat.geo.plan.calques.filter((c) => c.etat).length;
+  $("#info-geles").textContent = geles ? `Les ${geles} calque(s) gelé(s) ou éteint(s) dans le fichier sont écartés d'office.` : "";
   afficherCalques();
 }
 function majCompte() { $("#compte-calques").textContent = `(${etat.gardes.size} gardés sur ${etat.geo.plan.calques.length})`; }
@@ -701,7 +848,7 @@ function afficherCalques() {
     const detail = Object.entries(c.types).map(([t, n]) => `${t} ${n}`).join(", ");
     return `<li data-i="${i}" class="${g ? "" : "ecarte"} ${i === etat.selection ? "surligne" : ""}" title="${esc(detail)}">
       <input type="checkbox" ${g ? "checked" : ""}><span class="pastille" style="background:${c.couleur}"></span>
-      <span class="nom">${esc(c.nom)}</span><span class="n">${c.n}</span></li>`;
+      <span class="nom">${esc(c.nom)}</span>${c.etat ? `<span class="badge gele">${esc(c.etat)}</span>` : ""}<span class="n">${c.n}</span></li>`;
   }).join("");
   majCompte();
   $$("#liste-calques li").forEach((li) => {
@@ -718,10 +865,7 @@ function basculerCalque(nom, garder, memoriser = true) {
   garder ? etat.gardes.add(nom) : etat.gardes.delete(nom);
   afficherCalques(); vUnique.dessiner();
 }
-$("#annuler").addEventListener("click", () => {
-  const h = etat.historique.pop();
-  if (h) basculerCalque(h.nom, h.garder, false);
-});
+$("#annuler").addEventListener("click", () => { const h = etat.historique.pop(); if (h) basculerCalque(h.nom, h.garder, false); });
 $("#filtre-calques").addEventListener("input", afficherCalques);
 $("#tout-cocher").addEventListener("click", () => { etat.geo.plan.calques.forEach((c) => etat.gardes.add(c.nom)); etat.historique = []; afficherCalques(); vUnique.dessiner(); });
 $("#tout-decocher").addEventListener("click", () => { etat.gardes.clear(); etat.historique = []; afficherCalques(); vUnique.dessiner(); });
@@ -731,15 +875,13 @@ $("#mode-ecarter").addEventListener("click", () => {
   $("#mode-ecarter").textContent = etat.modeEcarter ? "Écarter au clic : ACTIF" : "Écarter au clic";
 });
 
-// Objet le plus proche du curseur parmi les objets affichés du plan -> son calque
 function objetSous(x, y, inclureEcartes) {
   const geo = etat.geo.plan, s = etat.sim;
   const [px, py] = inverserSim(s, x, y);
   const rx = px - geo.origine[0], ry = py - geo.origine[1];
   let dmin = 9 / (vUnique.k * Math.hypot(s.ar, s.ai)), meilleur = null;
   for (const g of geo.groupes) {
-    const coul = couleurPlanSuperpose(g);
-    if (!coul) continue;
+    if (!couleurPlanSuperpose(g)) continue;
     if (!inclureEcartes && !etat.gardes.has(geo.calques[g.l].nom)) continue;
     for (const l of g.lignes) {
       for (let i = 0; i + 3 < l.length; i += 2) {
@@ -750,20 +892,20 @@ function objetSous(x, y, inclureEcartes) {
   }
   return meilleur;
 }
+const enNettoyage = () => etat.ecran === "ajout" && etat.etape === 3;
 let survolNettoyagePrevu = false;
 vUnique.surSurvol = (x, y, e) => {
-  if (etat.onglet !== "projet" || etat.etape !== 3 || etat.dessinZone) { $("#bulle").hidden = true; return; }
+  if (!enNettoyage() || etat.dessinZone) { $("#bulle").hidden = true; return; }
   if (survolNettoyagePrevu) return;
   survolNettoyagePrevu = true;
   requestAnimationFrame(() => {
     survolNettoyagePrevu = false;
     const g = objetSous(x, y, $("#voir-ecartes").checked);
-    const bulle = $("#bulle");
-    const avant = etat.surligne;
+    const bulle = $("#bulle"), avant = etat.surligne;
     etat.surligne = g ? g.l : null;
     if (g) {
       const nom = etat.geo.plan.calques[g.l].nom, garde = etat.gardes.has(nom);
-      bulle.textContent = `${nom}${garde ? "" : " (écarté)"}${etat.modeEcarter && garde ? " — clic : écarter" : ""}`;
+      bulle.textContent = `${nom}${garde ? "" : " (écarté — clic : garder)"}${etat.modeEcarter && garde ? " — clic : écarter" : ""}`;
       bulle.style.left = `${e.offsetX + 14}px`; bulle.style.top = `${e.offsetY + 14}px`;
       bulle.hidden = false;
     } else bulle.hidden = true;
@@ -771,19 +913,17 @@ vUnique.surSurvol = (x, y, e) => {
   });
 };
 vUnique.surSortie = () => { $("#bulle").hidden = true; if (etat.surligne !== null) { etat.surligne = null; vUnique.dessiner(); } };
-
 vUnique.surClic = (x, y) => {
-  if (etat.onglet !== "projet" || etat.etape !== 3) return;
+  if (!enNettoyage()) return;
   if (etat.dessinZone) { etat.zone.pts.push([x, y]); vUnique.dessiner(); return; }
   const g = objetSous(x, y, $("#voir-ecartes").checked);
   const boite = $("#info-objet");
   if (!g) { boite.hidden = true; etat.selection = null; afficherCalques(); vUnique.dessiner(); return; }
-  const geo = etat.geo.plan, c = geo.calques[g.l], garde = etat.gardes.has(c.nom);
+  const c = etat.geo.plan.calques[g.l], garde = etat.gardes.has(c.nom);
   if (etat.modeEcarter && garde) { basculerCalque(c.nom, false); toast(`Calque « ${c.nom} » écarté.`, true); return; }
   if (!garde) { basculerCalque(c.nom, true); toast(`Calque « ${c.nom} » de nouveau gardé.`, true); return; }
   etat.selection = g.l;
-  boite.innerHTML = `Calque <b>« ${esc(c.nom)} »</b> sélectionné — ${c.n} objets
-    <button id="ecarter-selection">Écarter ce calque</button>`;
+  boite.innerHTML = `Calque <b>« ${esc(c.nom)} »</b> sélectionné — ${c.n} objets <button id="ecarter-selection">Écarter ce calque</button>`;
   boite.hidden = false;
   $("#ecarter-selection").addEventListener("click", () => { etat.selection = null; boite.hidden = true; basculerCalque(c.nom, false); });
   afficherCalques(); vUnique.dessiner();
@@ -791,7 +931,7 @@ vUnique.surClic = (x, y) => {
   if (li) li.scrollIntoView({ block: "nearest" });
 };
 document.addEventListener("keydown", (e) => {
-  if (etat.onglet !== "projet" || etat.etape !== 3) return;
+  if (!enNettoyage()) return;
   if ((e.key === "Delete" || e.key === "Backspace") && etat.selection !== null && document.activeElement.tagName !== "INPUT") {
     const nom = etat.geo.plan.calques[etat.selection].nom;
     etat.selection = null; $("#info-objet").hidden = true; basculerCalque(nom, false);
@@ -800,12 +940,12 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "z") { $("#annuler").click(); e.preventDefault(); }
 });
 
-// zone
 $("#dessiner-zone").addEventListener("click", () => {
+  if (etat.dessinZone && etat.zone && etat.zone.pts.length >= 3) { fermerZone(); return; }   // « Terminer la zone »
   etat.dessinZone = !etat.dessinZone;
   if (etat.dessinZone) { etat.zone = { pts: [], fermee: false }; vUnique.zone = etat.zone; }
   $("#dessiner-zone").classList.toggle("actif", etat.dessinZone);
-  $("#dessiner-zone").textContent = etat.dessinZone ? "Dessin en cours… (double-clic pour fermer)" : "Redessiner la zone";
+  $("#dessiner-zone").textContent = etat.dessinZone ? "Terminer la zone (ou double-clic)" : "Redessiner la zone";
   vUnique.dessiner();
 });
 $("#effacer-zone").addEventListener("click", () => {
@@ -813,8 +953,8 @@ $("#effacer-zone").addEventListener("click", () => {
   $("#dessiner-zone").classList.remove("actif"); $("#dessiner-zone").textContent = "Dessiner la zone";
   $("#effacer-zone").disabled = true; vUnique.dessiner();
 });
-vUnique.surDoubleClic = () => {
-  if (etat.etape !== 3 || !etat.dessinZone) return;
+vUnique.surDoubleClic = () => { if (enNettoyage() && etat.dessinZone) fermerZone(); };
+function fermerZone() {
   const z = etat.zone;
   while (z.pts.length > 1) {
     const a = z.pts[z.pts.length - 1], b = z.pts[z.pts.length - 2];
@@ -826,48 +966,55 @@ vUnique.surDoubleClic = () => {
   $("#effacer-zone").disabled = false; vUnique.dessiner();
 };
 
-// =========================================================================== export
+// --------------------------------------------------------------------------- enregistrer
 $("#exporter").addEventListener("click", async () => {
   if (etat.dessinZone) { toast("Terminez d'abord la zone (double-clic) ou effacez-la.", true); return; }
   const corps = {
-    chantier: $("#chantier").value.trim(), type_plan: $("#type-plan").value.trim(), indice: $("#indice").value.trim(),
+    chantier: etat.chantier, type_plan: $("#type-plan").value.trim(), indice: $("#indice").value.trim(),
     prefixe: $("#prefixe").value, calques: [...etat.gardes],
     familles: etat.familles.filter((f) => f.coche).map((f) => f.libelle),
-    zone: etat.zone && etat.zone.fermee ? etat.zone.pts : null,
-    hachures: modeHachures(),
+    zone: etat.zone && etat.zone.fermee ? etat.zone.pts : null, hachures: modeHachures(),
   };
   try {
     const r = await avecAttente("Création du DXF calé et de la recette…", () => api("/api/exporter", corps));
     ouvrirEtape(4);
-    afficherRapport($("#resultat-export"), r, true);
-    etat.resultatProjet = r;
+    afficherRapport($("#resultat-export"), r, "creation");
+    const p = document.createElement("div");
+    p.innerHTML = `<p class="aide">Le plan « ${esc(corps.type_plan)} » est enregistré. Ses prochaines versions : bouton
+      <b>« Nouvel indice reçu »</b> sur la page du chantier.</p>
+      <div class="boutons"><button class="principal" id="fin-retour">Retour au chantier</button>
+      <button id="fin-autre">Ajouter un autre plan</button></div>`;
+    $("#resultat-export").prepend(p);
+    $("#fin-retour").addEventListener("click", () => ouvrirChantier(etat.chantier));
+    $("#fin-autre").addEventListener("click", async () => { await chargerChantiers(); ouvrirAjout(); });
     montrerResultat(r);
     chargerChantiers();
   } catch { /* déjà signalé */ }
 });
 
+// =========================================================================== rapport commun
 const NOMS_TYPES = { LINE: "lignes", LWPOLYLINE: "polylignes", POLYLINE: "polylignes (anciennes)", CIRCLE: "cercles",
   ARC: "arcs", TEXT: "textes", MTEXT: "textes multilignes", HATCH: "hachures", DIMENSION: "cotations",
   MULTILEADER: "lignes de repère", ATTDEF: "attributs", ATTRIB: "attributs", SOLID: "surfaces pleines",
   SPLINE: "courbes", ELLIPSE: "ellipses", MLINE: "multilignes", POINT: "points" };
 const nomType = (t) => NOMS_TYPES[t] || t;
 
-function afficherRapport(cible, rep, creation) {
-  const r = rep.rapport, mode = r.mode;
+function afficherRapport(cible, rep, contexte) {
+  const r = rep.rapport, mode = r.mode, creation = contexte === "creation";
   const titres = {
-    "identique": creation ? "DXF calé créé, recette enregistrée" : "Calé : même origine que l'indice précédent",
-    "recalé": "Calé AVEC CORRECTION AUTOMATIQUE : le plan avait bougé",
+    "identique": creation ? "DXF calé créé" : "Même origine que l'indice précédent : calé sans problème",
+    "recalé": "Calé AVEC CORRECTION AUTOMATIQUE : ce plan avait bougé par rapport à l'indice précédent",
     "forcé": "Produit SANS CONTRÔLE (forcé) : à vérifier soigneusement",
     "refus": "Refusé : aucun fichier produit",
   };
   const cls = { "identique": "identique", "recalé": "recale", "forcé": "force", "refus": "refus" }[mode];
   let h = `<div class="bandeau ${cls}">${titres[mode] || mode}`;
-  if (mode !== "identique" || !creation) h += `<p>${esc(r.controle.message || "")}</p>`;
+  if (mode !== "identique") h += `<p>${esc(r.controle.message || "")}</p>`;
   h += `</div>`;
   if (rep.telecharger) h += `<a class="telecharger" href="${rep.telecharger}">Télécharger le DXF calé</a>`;
   if (mode === "refus" && !creation) {
-    h += `<p class="aide">Rien n'a été enregistré. Que faire : recaler ce plan dans l'onglet « Caler un nouveau plan »
-      (même chantier, même type de plan ; le calage automatique peut aider).</p>
+    h += `<p class="aide">Rien n'a été enregistré. Ce plan doit être recalé : retournez au chantier, « Ajouter un plan à
+      caler » avec le même nom de plan (le calage automatique peut aider).</p>
       <button id="forcer" class="danger">Produire quand même (déconseillé)</button>`;
   }
   const al = r.alertes.filter((a) => !(r.controle.message && a.includes(r.controle.message)));
@@ -884,56 +1031,26 @@ function afficherRapport(cible, rep, creation) {
       ${r.hors_zone ? `<tr><td>Hors zone</td><td>${r.hors_zone}</td></tr>` : ""}
       ${Object.keys(r.non_transformables).length ? `<tr><td><b>Non transformés</b></td><td>${esc(JSON.stringify(r.non_transformables))}</td></tr>` : ""}
       <tr><td>Contenu</td><td>${contenu}</td></tr>
-      <tr><td>Concordance</td><td>${Math.round(100 * (r.controle.part_ancres_identiques || 0))} % des repères retrouvés tels quels${
-        r.controle.part_ancres_apres_correction != null ? `, ${Math.round(100 * r.controle.part_ancres_apres_correction)} % après correction` : ""}</td></tr>
     </table>`;
-    if (rep.chemin_sortie) h += `<p class="aide">Enregistré aussi dans : ${esc(rep.chemin_sortie)}</p>`;
+    if (rep.chemin_sortie) h += `<p class="aide">Enregistré dans : ${esc(rep.chemin_sortie)}</p>`;
   }
   h += `<details><summary>Rapport complet</summary><pre>${esc(rep.texte)}</pre></details>`;
-  if (creation) h += `<p class="aide">Indices suivants de ce plan : onglet <b>« Nouvel indice »</b>, chantier « ${esc(rep.chantier)} », type « ${esc(rep.type_plan)} ».</p>
-    <div class="boutons"><button id="autre-plan" class="principal">Caler un autre plan sur ce chantier</button>
-    <button id="nouveau-chantier">Nouveau chantier</button></div>`;
   cible.innerHTML = h;
-  const ba = cible.querySelector("#autre-plan");
-  if (ba) ba.addEventListener("click", () => nouveauPlan(true));
-  const bn = cible.querySelector("#nouveau-chantier");
-  if (bn) bn.addEventListener("click", () => nouveauPlan(false));
   const bf = cible.querySelector("#forcer");
   if (bf) bf.addEventListener("click", () => {
     if (confirm("Le contrôle a échoué : le fichier produit risque d'être FAUX. Produire quand même ?")) calerIndice(true);
   });
 }
 function montrerResultat(rep) {
-  vUnique.vider();
-  const ref = rep.reference, res = rep.resultat;
-  if (!ref && !res) { afficherVues("accueil", "Aucun fichier produit."); return; }
-  vUnique.origine = (ref || res).origine;
-  if (ref) vUnique.ajouterCouche({ geo: ref, couleur: () => COUL_REF, textes: false });
-  if (res) vUnique.ajouterCouche({ geo: res, couleur: () => COUL_ROUGE });
-  $("#titre-unique").textContent = res ? "Résultat : DXF calé (rouge) sur la référence (gris)" : "Référence du chantier (aucun fichier produit)";
-  $("#case-couleurs").hidden = true;
-  afficherVues("unique");
-  requestAnimationFrame(() => vUnique.ajuster(res ? res.emprise : ref.emprise));
+  const couches = [];
+  if (rep.reference) couches.push({ geo: rep.reference, couleur: () => COUL_REF, textes: false });
+  if (rep.resultat) couches.push({ geo: rep.resultat, couleur: () => COUL_ROUGE });
+  if (!couches.length) { afficherVues("accueil", "Aucun fichier produit."); return; }
+  montrerGeo(couches, rep.resultat ? "Résultat : DXF calé (rouge) sur la référence (gris)" : "Référence du chantier (aucun fichier produit)",
+    (rep.resultat || rep.reference).emprise);
 }
 
-// =========================================================================== nouvel indice
-function remplirSelectsIndice() {
-  const sc = $("#i-chantier"), avant = sc.value, indiceSaisi = $("#i-indice").value;
-  const avecTypes = etat.chantiers.filter((c) => c.types.length);
-  sc.innerHTML = avecTypes.length ? avecTypes.map((c) => `<option>${esc(c.nom)}</option>`).join("")
-    : `<option value="">(aucun chantier : calez d'abord un plan)</option>`;
-  if (avant && avecTypes.some((c) => c.nom === avant)) sc.value = avant;
-  remplirTypesIndice();
-  if (indiceSaisi && avant === sc.value) { $("#i-indice").value = indiceSaisi; majInfoIndice(false); }
-}
-function remplirTypesIndice() {
-  const ch = etat.chantiers.find((c) => c.nom === $("#i-chantier").value);
-  const st = $("#i-type"), avant = st.value;
-  st.innerHTML = ch ? ch.types.map((t) => `<option>${esc(t.type)}</option>`).join("") : "";
-  if (avant && ch && ch.types.some((t) => t.type === avant)) st.value = avant;
-  majInfoIndice(true);
-}
-// Indice suivant proposé : A -> B, 3 -> 4, B2 -> B3 ; sinon rien
+// =========================================================================== NOUVEL INDICE
 function indiceSuivant(dernier) {
   if (!dernier) return "";
   const m = dernier.match(/^(.*?)(\d+)$/);
@@ -941,27 +1058,30 @@ function indiceSuivant(dernier) {
   if (/^[A-Ya-y]$/.test(dernier)) return String.fromCharCode(dernier.charCodeAt(0) + 1);
   return "";
 }
-function typeIndiceChoisi() {
-  const ch = etat.chantiers.find((c) => c.nom === $("#i-chantier").value);
-  return ch && ch.types.find((x) => x.type === $("#i-type").value);
+const typeIndice = () => (chantierCourant() || { types: [] }).types.find((t) => t.type === etat.typeIndice);
+async function ouvrirIndice(type) {
+  etat.typeIndice = type;
+  aller("indice");
+  const t = typeIndice();
+  $("#ni-titre").textContent = `Nouvel indice — ${type}`;
+  $("#ni-historique").innerHTML = t && t.indices.length
+    ? `Indices déjà enregistrés : ${t.indices.map((i) => `<b>${esc(i.indice || i.plan)}</b>`).reverse().join(" → ")}` : "";
+  $("#i-indice").value = t ? indiceSuivant(t.indices.length ? t.indices[0].indice : "") : "";
+  etat.indiceCharge = false;
+  viderDepot($('#e-indice .depot[data-role="indice"]')); viderDepot($('#e-indice .depot[data-role="indice_xref"]'));
+  $("#resultat-indice").innerHTML = "";
+  majInfoIndice();
+  // affichage : la référence et le dernier indice de ce plan
+  if (t && t.indices.length) { etat.coches = new Set([t.indices[0].id]); majVueChantier(); }
 }
-function majInfoIndice(proposer = false) {
-  const t = typeIndiceChoisi();
-  $("#i-info").textContent = t ? `Recette créée le ${t.cree_le.replace("T", " à ")} sur « ${t.plan} ».` : "";
-  $("#i-historique").innerHTML = t && t.indices.length
-    ? `<b>Indices déjà validés :</b><ol reversed>${t.indices.map((i) => `<li>${esc(i.indice || i.plan)}
-        <small>${esc((i.date || "").replace("T", " ").slice(0, 16))}${i.mode && i.mode !== "identique" ? " · " + esc(i.mode) : ""}</small></li>`).join("")}</ol>`
-    : "";
-  if (proposer && t) $("#i-indice").value = indiceSuivant(t.indices.length ? t.indices[0].indice : "");
-  const nom = $("#i-indice").value.trim().toLowerCase();
+function majInfoIndice() {
+  const t = typeIndice(), nom = $("#i-indice").value.trim().toLowerCase();
   $("#i-avert-indice").textContent = t && nom && t.indices.some((i) => (i.indice || "").toLowerCase() === nom)
-    ? "Attention : un indice porte déjà ce nom pour ce type de plan." : "";
+    ? "Attention : un indice porte déjà ce nom pour ce plan." : "";
   $("#caler-indice").disabled = !(t && etat.indiceCharge);
 }
-$("#i-chantier").addEventListener("change", remplirTypesIndice);
-$("#i-type").addEventListener("change", () => majInfoIndice(true));
-$("#i-indice").addEventListener("input", () => majInfoIndice(false));
-$$("#onglet-indice .depot").forEach((label) => installerDepot(label, async (fichiers) => {
+$("#i-indice").addEventListener("input", majInfoIndice);
+$$("#e-indice .depot").forEach((label) => installerDepot(label, async (fichiers) => {
   const role = label.dataset.role;
   try {
     await avecAttente("Envoi du fichier…", async () => {
@@ -977,159 +1097,52 @@ async function calerIndice(forcer = false) {
   if (!$("#i-indice").value.trim() && !confirm("Aucun nom d'indice : continuer quand même ?")) return;
   try {
     const r = await avecAttente("Calage du nouvel indice (contrôle, nettoyage, transformation)…", () => api("/api/indice", {
-      chantier: $("#i-chantier").value, type_plan: $("#i-type").value, indice: $("#i-indice").value.trim(),
+      chantier: etat.chantier, type_plan: etat.typeIndice, indice: $("#i-indice").value.trim(),
       forcer, ecarter_nouveaux: $("#ecarter-nouveaux").checked,
     }));
-    etat.indiceEnAttente = r.attente ? r : null;
-    afficherRapport($("#resultat-indice"), r, false);
+    afficherRapport($("#resultat-indice"), r, "indice");
     ajouterBoutonsValidation(r);
-    etat.resultatIndice = r;
     montrerResultat(r);
   } catch { /* déjà signalé */ }
 }
+$("#caler-indice").addEventListener("click", () => calerIndice(false));
 function ajouterBoutonsValidation(r) {
   if (!r.attente) return;
   const nom = r.indice || "ce plan";
   const bloc = document.createElement("div");
-  bloc.innerHTML = `<div class="etat-indice">Vérifiez la superposition à droite, puis :</div>
-    <div class="valider"><button class="vert" id="valider-indice">✔ Valider l'indice ${esc(nom)}</button>
+  bloc.innerHTML = `<div class="etat-indice">Regardez la vue à droite (rouge = nouvel indice, gris = référence). Si c'est bon :</div>
+    <div class="valider"><button class="vert" id="valider-indice">✔ Enregistrer l'indice ${esc(nom)}</button>
     <button id="abandonner-indice">Abandonner</button></div>`;
   const cible = $("#resultat-indice");
   cible.insertBefore(bloc, cible.querySelector(".bandeau").nextSibling);
   $("#valider-indice").addEventListener("click", async () => {
-    if (r.rapport.mode === "forcé" && !confirm("Ce plan a été produit SANS contrôle. Le valider quand même ?")) return;
+    if (r.rapport.mode === "forcé" && !confirm("Ce plan a été produit SANS contrôle. L'enregistrer quand même ?")) return;
     try {
       const v = await avecAttente("Enregistrement de l'indice…", () => api("/api/indice/valider",
         { chantier: r.chantier, type_plan: r.type_plan, attente: r.attente }));
-      etat.indiceEnAttente = null;
-      bloc.innerHTML = `<div class="bandeau identique">Indice ${esc(nom)} validé et enregistré</div>
+      bloc.innerHTML = `<div class="bandeau identique">Indice ${esc(nom)} enregistré</div>
         <a class="telecharger" href="${v.telecharger}">Télécharger le DXF calé</a>
-        <p class="aide">Enregistré dans : ${esc(v.chemin_sortie)}</p>
-        <div class="boutons">${v.precedent ? `<button id="comparer-precedent">Voir les différences avec l'indice précédent</button>` : ""}
-        <button id="indice-suivant">Caler un autre indice</button></div>`;
-      if (v.precedent) $("#comparer-precedent").addEventListener("click", () => comparerIds([v.precedent, v.id], r.chantier));
-      $("#indice-suivant").addEventListener("click", reinitialiserIndice);
+        <div class="boutons">${v.precedent ? `<button id="comparer-precedent">Voir ce qui a changé depuis l'indice précédent</button>` : ""}
+        <button class="principal" id="retour-chantier">Retour au chantier</button></div>`;
+      if (v.precedent) $("#comparer-precedent").addEventListener("click", async () => {
+        await ouvrirChantier(etat.chantier, false);
+        etat.coches = new Set([v.precedent, v.id]);
+        afficherChantier();
+        $("#btn-differences").click();
+      });
+      $("#retour-chantier").addEventListener("click", () => ouvrirChantier(etat.chantier));
       await chargerChantiers();
-      majInfoIndice(false);
     } catch { /* déjà signalé */ }
   });
   $("#abandonner-indice").addEventListener("click", async () => {
     try { await api("/api/indice/abandonner", { chantier: r.chantier, type_plan: r.type_plan, attente: r.attente }); }
     catch (e) { toast(e.message); }
-    etat.indiceEnAttente = null;
-    reinitialiserIndice();
     toast("Indice abandonné : rien n'a été enregistré.", true);
+    ouvrirIndice(etat.typeIndice);
   });
 }
-function reinitialiserIndice() {
-  etat.indiceCharge = false; etat.resultatIndice = null;
-  $$("#onglet-indice .depot").forEach((l) => { l.classList.remove("charge"); l.querySelector(".etat").textContent = ""; });
-  $("#resultat-indice").innerHTML = `<p class="aide">Le résultat s'affichera ici. Rien n'est enregistré tant que vous n'avez pas cliqué « Valider ».</p>`;
-  majInfoIndice(true);
-  afficherVues("accueil", "Déposez le plan du nouvel indice à gauche.");
-}
-$("#caler-indice").addEventListener("click", () => calerIndice(false));
 
-// =========================================================================== chantiers et comparaison
-function remplirArbre() {
-  const sc = $("#c-chantier"), avant = sc.value;
-  sc.innerHTML = etat.chantiers.length ? etat.chantiers.map((c) => `<option>${esc(c.nom)}</option>`).join("") : `<option value="">(aucun chantier)</option>`;
-  if (avant && etat.chantiers.some((c) => c.nom === avant)) sc.value = avant;
-  const ch = etat.chantiers.find((c) => c.nom === sc.value);
-  const coches = new Set($$("#arbre input:checked").map((i) => i.value));
-  $("#arbre").innerHTML = !ch ? "" : (ch.types.map((t) => `<div class="type">${esc(t.type)}
-      <span class="ajout-indice" data-type="${esc(t.type)}">+ nouvel indice</span></div>` + (t.indices.length ? t.indices.map((i) =>
-    `<label><input type="checkbox" value="${esc(i.id)}" ${coches.has(i.id) ? "checked" : ""}> ${esc(i.indice || i.plan)}
-      <small>${esc((i.date || "").replace("T", " ").slice(0, 16))}${i.mode && i.mode !== "identique" ? " · " + esc(i.mode) : ""}</small>
-      <a href="/telecharger_indice?id=${encodeURIComponent(i.id)}" title="Télécharger le DXF calé">DXF</a></label>`).join("")
-    : `<p class="aide">aucun indice calé</p>`)).join("") || `<p class="aide">Aucun plan calé pour ce chantier.</p>`)
-    + (ch ? `<p><span class="ajout-indice" id="ajout-type">+ caler un nouveau type de plan sur ce chantier</span></p>` : "");
-  $$("#arbre input").forEach((i) => i.addEventListener("change", majBoutonsComparer));
-  const at = $("#ajout-type");
-  if (at) at.addEventListener("click", async () => {
-    const chantier = $("#c-chantier").value;
-    nouveauPlan(false);
-    $("#chantier").value = chantier; majTypesProposes();
-    try {   // la référence du chantier est reprise automatiquement
-      await avecAttente("Lecture de la référence du chantier…", async () => {
-        const r = await api("/api/reference_chantier", { chantier });
-        apresOuverture("ref", $('.depot[data-role="ref"]'), r);
-      });
-    } catch { /* déjà signalé */ }
-    $("#type-plan").focus();
-  });
-  $$("#arbre .ajout-indice[data-type]").forEach((a) => a.addEventListener("click", () => {
-    const chantier = $("#c-chantier").value, type = a.dataset.type;
-    changerOnglet("indice");
-    $("#i-chantier").value = chantier; remplirTypesIndice();
-    $("#i-type").value = type; majInfoIndice(true);
-  }));
-  majBoutonsComparer();
-}
-$("#c-chantier").addEventListener("change", remplirArbre);
-$("#c-nouveau-chantier").addEventListener("click", () => nouveauPlan(false));
-function majBoutonsComparer() {
-  const n = $$("#arbre input:checked").length;
-  $("#superposer").disabled = n < 1;
-  $("#differences").disabled = n !== 2;
-}
-$("#superposer").addEventListener("click", async () => {
-  const ids = $$("#arbre input:checked").map((i) => i.value);
-  try {
-    const r = await avecAttente("Chargement des plans…", () => api("/api/comparer", { ids, mode: "superposer" }));
-    vUnique.vider();
-    const base = r.reference || r.calques[0].geometrie;
-    vUnique.origine = base.origine;
-    if (r.reference) vUnique.ajouterCouche({ geo: r.reference, couleur: () => "#c4c8cf", textes: false });
-    let leg = r.reference ? `<div><i style="background:#c4c8cf"></i> Référence</div>` : "";
-    r.calques.forEach((c, k) => {
-      const coul = PALETTE[k % PALETTE.length];
-      vUnique.ajouterCouche({ geo: c.geometrie, couleur: () => coul });
-      leg += `<div><i style="background:${coul}"></i> ${esc(c.nom)}</div>`;
-    });
-    $("#legende").innerHTML = leg;
-    $("#titre-unique").textContent = "Plans superposés";
-    $("#case-couleurs").hidden = true;
-    afficherVues("unique");
-    requestAnimationFrame(() => vUnique.ajuster(r.calques[0].geometrie.emprise));
-  } catch { /* déjà signalé */ }
-});
-$("#differences").addEventListener("click", () => differences($$("#arbre input:checked").map((i) => i.value)));
-async function comparerIds(ids, chantier) {
-  changerOnglet("chantiers");
-  $("#c-chantier").value = chantier; remplirArbre();
-  $$("#arbre input").forEach((c) => (c.checked = ids.includes(c.value)));
-  majBoutonsComparer();
-  await differences(ids);
-}
-async function differences(idsBruts) {
-  // l'ordre : le plus ancien d'abord (les identifiants commencent par la date)
-  const ids = [...idsBruts].sort((a, b) => a.split("/")[2].localeCompare(b.split("/")[2]));
-  try {
-    const r = await avecAttente("Comparaison des deux plans…", () => api("/api/comparer", { ids, mode: "differences" }));
-    vUnique.vider();
-    const base = r.reference || r.inchanges || r.ajoutes || r.supprimes;
-    vUnique.origine = base.origine;
-    if (r.reference) vUnique.ajouterCouche({ geo: r.reference, couleur: () => "#dadde2", textes: false });
-    if (r.inchanges) vUnique.ajouterCouche({ geo: r.inchanges, couleur: () => "#7b818c" });
-    if (r.supprimes) vUnique.ajouterCouche({ geo: r.supprimes, couleur: () => "#d62020", epaisseur: 2 });
-    if (r.ajoutes) vUnique.ajouterCouche({ geo: r.ajoutes, couleur: () => "#12a33a", epaisseur: 2 });
-    const lignes = Object.entries(r.par_calque).slice(0, 15).map(([c, v]) =>
-      `<tr><td>${esc(c)}</td><td style="color:#12a33a">+${v.ajoutes}</td><td style="color:#d62020">−${v.supprimes}</td></tr>`).join("");
-    $("#legende").innerHTML = `<p><b>${esc(r.ancien)} → ${esc(r.nouveau)}</b></p>
-      <div><i style="background:#12a33a"></i> Nouveau ou déplacé : ${r.compte.ajoutes}</div>
-      <div><i style="background:#d62020"></i> Supprimé ou déplacé : ${r.compte.supprimes}</div>
-      <div><i style="background:#7b818c"></i> Inchangé : ${r.compte.inchanges}</div>
-      ${lignes ? `<table>${lignes}</table>` : ""}`;
-    $("#titre-unique").textContent = `Différences ${r.ancien} → ${r.nouveau}`;
-    $("#case-couleurs").hidden = true;
-    afficherVues("unique");
-    const emp = (r.inchanges || r.ajoutes || r.supprimes).emprise;
-    requestAnimationFrame(() => vUnique.ajuster(emp));
-  } catch { /* déjà signalé */ }
-}
-
-// boutons « Tout voir »
+// =========================================================================== divers
 $$("[data-ajuster]").forEach((b) => b.addEventListener("click", () => {
   const v = { plan: vPlan, ref: vRef, unique: vUnique }[b.dataset.ajuster];
   if (!v.couches.length) return;
@@ -1137,6 +1150,4 @@ $$("[data-ajuster]").forEach((b) => b.addEventListener("click", () => {
   v.ajuster(v === vUnique && v.couches.length > 1 ? emps[emps.length - 1] : emps[0]);
 }));
 
-reinitialiserCalage();
-ouvrirEtape(1);
-changerOnglet("projet");
+ouvrirAccueil();

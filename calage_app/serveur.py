@@ -122,7 +122,14 @@ def fabriquer_gestionnaire(session: Session):
                 if url.path == "/api/indice/abandonner":
                     return self._json(session.abandonner_indice(d["chantier"], d["type_plan"], d["attente"]))
                 if url.path == "/api/comparer":
-                    return self._json(session.comparer(d["ids"], d.get("mode", "superposer")))
+                    return self._json(session.comparer(d.get("ids", []), d.get("mode", "superposer"),
+                                                       d.get("chantier")))
+                if url.path == "/api/chantier/creer":
+                    return self._json(session.creer_chantier(d["nom"]))
+                if url.path == "/api/chantier/reference":
+                    return self._json(session.changer_reference(d["chantier"]))
+                if url.path == "/api/supprimer":
+                    return self._json(session.supprimer(d["chantier"], d.get("type_plan"), d.get("id")))
                 return self._json({"erreur": "introuvable"}, 404)
             except Exception as ex:
                 return self._erreur(ex)

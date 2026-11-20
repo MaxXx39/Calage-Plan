@@ -212,10 +212,10 @@ class Session:
             res = evaluer(cal.similitude, [], "automatique", abs(cal.icp.similitude.echelle), confiance)
             res.verdict = "sans contrôle"
             res.message = {
-                "forte": "Calage automatique trouvé, confiance FORTE. Vérifiez la superposition et "
-                         "ajoutez un point de contrôle.",
-                "moyenne": "Calage automatique trouvé, confiance MOYENNE : vérifiez soigneusement "
-                           "avec un ou deux points de contrôle.",
+                "forte": "Calage automatique trouvé, confiance FORTE. Regardez la superposition et "
+                         "cliquez un point de vérification pour en être sûr.",
+                "moyenne": "Calage automatique trouvé, confiance MOYENNE : cliquez un ou deux points "
+                           "de vérification avant de continuer.",
                 "faible": "Calage automatique INCERTAIN : probablement faux. Calez à la main.",
             }[niveau]
             self.calage = res
@@ -233,6 +233,57 @@ class Session:
         return {"familles": out, "nb_hachures": presents.get("HATCH", 0)}
 
     # ================================================================== chantiers
+    def creer_chantier(self, nom: str) -> dict:
+        """Nouveau chantier : un nom + la référence MN95 déposée juste avant."""
+        nom = (nom or "").strip()
+        if not nom:
+            raise ErreurAppli("Donnez un nom au chantier.")
+        d = self._d_chantier(nom)
+        if d.exists():
+            raise ErreurAppli(f"Le chantier « {d.name} » existe déjà.")
+        ref = self.fichiers.get("ref")
+        if ref is None:
+            raise ErreurAppli("Déposez la référence MN95 du chantier.")
+        lire_plan(ref)    # vérifie qu'elle est lisible avant de créer quoi que ce soit
+        d.mkdir(parents=True)
+        shutil.copy2(ref, d / f"reference{ref.suffix.lower()}")
+        (d / "chantier.json").write_text(json.dumps(
+            {"nom": nom, "cree_le": dt.datetime.now().isoformat(timespec="seconds")},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"chantier": d.name}
+
+    def changer_reference(self, chantier: str) -> dict:
+        d = self._d_chantier(chantier)
+        ref = self.fichiers.get("ref")
+        if not d.is_dir() or ref is None:
+            raise ErreurAppli("Chantier ou référence introuvable.")
+        lire_plan(ref)
+        self._mettre_a_la_corbeille(*list(d.glob("reference.*")), prefixe=f"{d.name}_")
+        shutil.copy2(ref, d / f"reference{ref.suffix.lower()}")
+        return {"ok": True}
+
+    def supprimer(self, chantier: str, type_plan: str | None = None, ident: str | None = None) -> dict:
+        """Supprime un indice, un plan (recette + indices) ou un chantier : déplacés dans la corbeille."""
+        with self.verrou:
+            if ident:
+                cible = self._chemin_indice(ident)
+            elif type_plan:
+                cible = self._d_type(chantier, type_plan)
+            else:
+                cible = self._d_chantier(chantier)
+            if not cible.exists():
+                raise ErreurAppli("Élément introuvable.")
+            self._mettre_a_la_corbeille(cible, prefixe="_".join(
+                nom_sur(x) for x in (chantier, type_plan) if x) + "_")
+            return {"ok": True, "corbeille": str(self.racine / "corbeille")}
+
+    def _mettre_a_la_corbeille(self, *chemins: Path, prefixe: str = "") -> None:
+        corb = self.racine / "corbeille"
+        corb.mkdir(exist_ok=True)
+        horo = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        for c in chemins:
+            shutil.move(str(c), str(corb / f"{horo}_{prefixe}{c.name}"))
+
     def chantiers(self) -> dict:
         out = []
         for d in sorted((self.racine / "chantiers").iterdir(), key=lambda p: p.name.lower()):
@@ -256,6 +307,9 @@ class Session:
                 types.append({"type": t.name, "cree_le": data.get("cree_le", ""),
                               "plan": data.get("source", {}).get("plan", ""), "indices": indices})
             out.append({"nom": d.name, "reference": ref.name if ref else None, "types": types})
+            # dernière activité (pour trier les chantiers)
+            dates = [i["date"] for t in types for i in t["indices"] if i.get("date")]
+            out[-1]["derniere_activite"] = max(dates) if dates else ""
         # liste des types : uniquement ceux que l'utilisateur a déjà créés (tous chantiers confondus)
         tous_types = sorted({t["type"] for c in out for t in c["types"]}, key=str.lower)
         return {"chantiers": out, "types_existants": tous_types}
@@ -398,8 +452,11 @@ class Session:
         return g
 
     # ================================================================== comparaison
-    def comparer(self, ids: list[str], mode: str) -> dict:
+    def comparer(self, ids: list[str], mode: str, chantier: str | None = None) -> dict:
         if not ids:
+            if chantier:      # rien de coché : la référence seule
+                ref = self._reference_chantier(chantier)
+                return {"reference": self._geometrie(ref) if ref else None, "calques": []}
             raise ErreurAppli("Choisissez au moins un plan calé.")
         plans = []
         for ident in ids:

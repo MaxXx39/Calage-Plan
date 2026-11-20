@@ -218,3 +218,45 @@ def test_hachures_en_contour(plan_a_doc, dossier):
     assert sorties["contour"][0] == 0 and sorties["supprimer"][0] == 0
     assert sorties["contour"][1] > sorties["supprimer"][1] + 50       # les contours remplacent les hachures
     assert any("contour" in i for i in sorties["contour"][2].infos)
+
+
+def test_calage_trois_axes_sans_point():
+    """3 façades du bâtiment (2 parallèles + 1 perpendiculaire), aucun point : calage complet."""
+    from calage_core.points import calage_mixte
+    A1 = {"type": "axe", "plan": [16382.052, -16553.176, 21077.552, -16549.239],
+          "ref": [2510267.726, 1141751.289, 2510243.217, 1141791.34]}
+    A2 = {"type": "axe", "plan": [15905.161, -14091.758, 19985.355, -14088.02],
+          "ref": [2510249.206, 1141734.389, 2510227.906, 1141769.19]}
+    A3 = {"type": "axe", "plan": [16382.052, -16553.176, 15905.161, -14091.758],
+          "ref": [2510267.726, 1141751.289, 2510249.206, 1141734.389]}
+    V = {"type": "point", "role": "controle", "plan": list(P3[0]), "ref": list(P3[1])}
+    r = calage_mixte([A1, A2, A3, V])
+    assert r.similitude.echelle == 0.01 and abs(r.similitude.rotation_deg - 121.417) < 0.01
+    assert r.verdict == "bon"
+    with pytest.raises(ErreurCalage):
+        calage_mixte([A1, A3])       # 2 axes qui se croisent : échelle inconnue
+
+
+def test_decoupe_zone():
+    import numpy as np
+    from calage_core.decoupe import Zone
+    z = Zone([[0, 0], [10, 0], [10, 10], [0, 10]])
+    (m,) = z.decouper(np.array([[-5, 5], [15, 5]]))          # traverse de part en part
+    assert np.allclose(m, [[0, 5], [10, 5]])
+    assert z.decouper(np.array([[20, 20], [30, 30]])) == []   # entièrement dehors
+    assert z.traverse(np.array([[-5, 5], [15, 5]]))
+
+
+def test_session_chantier_et_suppression(tmp_path, plan_a_doc):
+    from calage_app.session import ErreurAppli, Session
+    s = Session(tmp_path)
+    with pytest.raises(ErreurAppli):
+        s.creer_chantier("Sans référence")
+    s.deposer("ref", "reference.dwg", REFERENCE.read_bytes())
+    assert s.creer_chantier("Mon chantier")["chantier"] == "Mon chantier"
+    with pytest.raises(ErreurAppli):
+        s.creer_chantier("Mon chantier")                      # existe déjà
+    assert s.chantiers()["chantiers"][0]["reference"] == "reference.dwg"
+    s.supprimer("Mon chantier")
+    assert s.chantiers()["chantiers"] == []
+    assert any((tmp_path / "corbeille").iterdir())          # rien n'est effacé pour de bon
