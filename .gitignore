@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+# Plans réels : confidentiels, ne pas publier (le dépôt est public)
+tests/data/*.dwg
+tests/data/*.dxf
+tests/data/*.DWG
+tests/data/*.DXF
