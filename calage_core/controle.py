@@ -128,7 +128,7 @@ def controler(segs_b: np.ndarray, recette, insunits_b: int | None = None) -> Res
         return ResultatControle(
             "recalé", part,
             f"ATTENTION : CE PLAN N'A PAS LA MÊME ORIGINE QUE L'INDICE APPRIS. "
-            f"Décalage détecté et corrigé automatiquement : rotation {(d_m.rotation_deg + 180) % 360 - 180 + 0.0:+.4f}°, "
+            f"Décalage détecté et corrigé automatiquement : rotation {round((d_m.rotation_deg + 180) % 360 - 180, 4) + 0.0:+.4f}°, "
             f"déplacement {d_m.tx:+.3f} m / {d_m.ty:+.3f} m (≈ {dep:.2f} m). "
             f"{part_apres:.0%} des repères concordent après correction. Vérifiez l'aperçu.",
             correction=corr, part_ancres_apres=part_apres, details=details)

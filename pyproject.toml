@@ -16,7 +16,10 @@ test = ["pytest>=7"]
 calage = "calage.cli:main"
 
 [tool.setuptools]
-packages = ["calage", "calage_core"]
+packages = ["calage", "calage_core", "calage_app"]
+
+[tool.setuptools.package-data]
+calage_app = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

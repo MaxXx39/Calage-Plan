@@ -14,7 +14,30 @@ pip install -e .[test]
 Lecture des `.dwg` : **ODA File Converter** (gratuit) s'il est installé, sinon `dwg2dxf`
 (LibreDWG) s'il est dans le PATH, sinon l'outil demande d'exporter le plan en DXF.
 
-## Utilisation
+## L'appli (recommandé)
+
+```bash
+python -m calage interface
+```
+
+Une page s'ouvre dans le navigateur (servie sur 127.0.0.1 : aucun fichier ne quitte le poste).
+
+**Nouveau projet (indice A)** — une fois par projet :
+1. *Fichiers* : déposer la référence MN95, le plan à caler, et ses xrefs s'ils ne sont pas liés.
+2. *Calage sur 3 points* : cliquer un point sur le plan puis le même sur la référence, 3 fois
+   (accrochage aux sommets, centres, intersections). Points 1 et 2 calent, le point 3 contrôle :
+   vert < 1 cm, orange < 5 cm, rouge au-delà. L'échelle est arrondie à la puissance de 10.
+3. *Nettoyage* : cocher les calques à garder, les types à supprimer (cotations, lignes de repère,
+   attributs, hachures…), le préfixe des calques, dessiner la zone à garder (facultatif).
+   Cliquer un objet sur la vue donne son calque.
+4. *Résultat* : DXF calé (R2000, mètres, blocs éclatés) à télécharger ; la recette est enregistrée
+   dans `~/CalagePlans/projets/<projet>/`.
+
+**Nouvel indice** : choisir le projet, déposer le plan, « Caler ce plan ». L'appli contrôle d'abord
+que le plan a la même origine (sinon : recalage automatique signalé, ou refus), puis rejoue le
+nettoyage et le calage.
+
+## Ligne de commande
 
 ```bash
 python -m calage apprendre plan_A.dwg final_A.dxf -o recette.json
@@ -50,12 +73,19 @@ DXF R2000 en mètres, rapport console + JSON, aperçu PNG (rouge sur gris).
 - `calage_core/controle.py` — contrôle de concordance d'un nouvel indice
 - `calage_core/application.py` — commande `appliquer` + rapport
 - `calage_core/export.py`, `calage_core/apercu.py`, `calage_core/recette.py`
-- `calage/cli.py` — ligne de commande
+- `calage_core/points.py` — calage par 2 points + contrôle
+- `calage_core/vue.py` — géométrie pour l'affichage, accrochage
+- `calage_core/recette_manuelle.py` — recette construite depuis les choix faits dans l'appli
+- `calage_app/` — serveur local (bibliothèque standard) et page web (`static/`)
+- `calage/cli.py` — ligne de commande (`interface`, `apprendre`, `appliquer`)
 
 ## Tests
 
 ```bash
 python -m pytest -q
 ```
+
+Parcours complet dans le navigateur (Playwright, serveur lancé sur le port 8765) :
+`node tests/e2e/parcours.js <dossier_captures> <plan_indice_B>`.
 
 Les plans réels ne sont pas versionnés (dépôt public) : voir `tests/data/LISEZMOI.md`.

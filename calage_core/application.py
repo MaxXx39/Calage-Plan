@@ -177,6 +177,10 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
     prefixe = net.get("prefixe_calque", "")
     zone = recette.zone.get("emprise_mn95")
     marge = float(recette.zone.get("marge_m", 0))
+    polygone = None
+    if recette.zone.get("polygone_mn95"):
+        from matplotlib.path import Path as MPath
+        polygone = MPath(np.asarray(recette.zone["polygone_mn95"], dtype=float))
     m = sim.matrice()
 
     exporteur = Exporteur(plan.doc)
@@ -202,8 +206,11 @@ def appliquer(chemin_plan, chemin_recette, chemin_sortie, ref=None, apercu=None,
             pts = points_familles(el.entite)
             if pts:
                 xy = sim.appliquer(np.array([(p[0], p[1]) for p in pts]))
-                dedans = ((xy[:, 0] >= zone[0] - marge) & (xy[:, 0] <= zone[2] + marge) &
-                          (xy[:, 1] >= zone[1] - marge) & (xy[:, 1] <= zone[3] + marge))
+                if polygone is not None:      # zone dessinée : garder ce qui touche le polygone
+                    dedans = polygone.contains_points(xy)
+                else:
+                    dedans = ((xy[:, 0] >= zone[0] - marge) & (xy[:, 0] <= zone[2] + marge) &
+                              (xy[:, 1] >= zone[1] - marge) & (xy[:, 1] <= zone[3] + marge))
                 if not dedans.any():
                     hors_zone += 1
                     continue

@@ -1,5 +1,7 @@
 """Ligne de commande :
 
+    python -m calage interface          (l'appli dans le navigateur)
+
     python -m calage apprendre PLAN_A FINAL_A -o recette.json
     python -m calage appliquer PLAN_B -r recette.json -o B_MN95.dxf [--ref REFERENCE] [--apercu B.png]
 """
@@ -63,7 +65,18 @@ def construire_parseur() -> argparse.ArgumentParser:
     b.add_argument("--ecarter-nouveaux", action="store_true",
                    help="écarter les calques jamais vus à l'apprentissage (par défaut : gardés et signalés)")
     b.set_defaults(func=_cmd_appliquer)
+    c = sp.add_parser("interface", help="ouvrir l'appli dans le navigateur (page locale)")
+    c.add_argument("--port", type=int, default=8765)
+    c.add_argument("--sans-navigateur", action="store_true", help="ne pas ouvrir le navigateur")
+    c.add_argument("--dossier", help="dossier de travail (défaut : ~/CalagePlans)")
+    c.set_defaults(func=_cmd_interface)
     return p
+
+
+def _cmd_interface(args) -> int:
+    from calage_app.serveur import lancer
+    lancer(args.port, not args.sans_navigateur, args.dossier)
+    return OK
 
 
 def main(argv=None) -> int:

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calage de plans</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Calage de plans</h1>
+  <nav>
+    <button class="onglet actif" data-onglet="projet">Nouveau projet (indice A)</button>
+    <button class="onglet" data-onglet="indice">Nouvel indice</button>
+  </nav>
+  <span class="local">Tout reste sur ce poste</span>
+</header>
+
+<main>
+  <!-- =========================================================== PANNEAU LATÉRAL -->
+  <aside id="panneau">
+
+    <!-- ------------------------------------------------ ONGLET NOUVEAU PROJET -->
+    <section id="onglet-projet">
+      <div class="etape" data-etape="1">
+        <h2><span class="num">1</span> Fichiers</h2>
+        <div class="contenu">
+          <label class="depot" data-role="ref">
+            <input type="file" accept=".dxf,.dwg" hidden>
+            <b>Référence MN95</b><span>le plan du géomètre (DXF ou DWG)</span>
+            <em class="etat"></em>
+          </label>
+          <label class="depot" data-role="plan">
+            <input type="file" accept=".dxf,.dwg" hidden>
+            <b>Plan à caler</b><span>DWG ou DXF de l'architecte / ingénieur</span>
+            <em class="etat"></em>
+          </label>
+          <label class="depot petit" data-role="xref">
+            <input type="file" accept=".dxf,.dwg" multiple hidden>
+            <b>Xrefs du plan</b><span>facultatif : si le plan en a qui ne sont pas liés</span>
+            <em class="etat"></em>
+          </label>
+          <div id="alertes-fichiers" class="alertes"></div>
+          <button id="vers-calage" class="principal" disabled>Continuer : calage →</button>
+        </div>
+      </div>
+
+      <div class="etape" data-etape="2">
+        <h2><span class="num">2</span> Calage sur 3 points</h2>
+        <div class="contenu">
+          <p class="aide">Cliquez un point sur le <b>plan</b> (à gauche), puis le <b>même point</b> sur la
+            <b>référence</b> (à droite). L'appli accroche les sommets, centres et intersections.
+            Points 1 et 2 : calage. Point 3 : contrôle (ne sert qu'à vérifier).</p>
+          <ol id="liste-points"></ol>
+          <div id="resultat-calage"></div>
+          <div class="boutons">
+            <button id="voir-superposition" disabled>Voir la superposition</button>
+            <button id="voir-cote-a-cote" hidden>Revoir côte à côte</button>
+          </div>
+          <button id="vers-nettoyage" class="principal" disabled>Valider le calage : nettoyage →</button>
+        </div>
+      </div>
+
+      <div class="etape" data-etape="3">
+        <h2><span class="num">3</span> Nettoyage</h2>
+        <div class="contenu">
+          <label class="champ">Nom du projet <input id="nom-projet" type="text"></label>
+          <label class="champ">Préfixe des calques <input id="prefixe" type="text"></label>
+          <h3>Supprimer</h3>
+          <div id="familles"></div>
+          <h3>Zone à garder</h3>
+          <div class="boutons">
+            <button id="dessiner-zone">Dessiner la zone</button>
+            <button id="effacer-zone" disabled>Effacer</button>
+          </div>
+          <p class="aide" id="aide-zone">Facultatif. Cliquez les sommets du contour sur la vue,
+            puis double-cliquez pour fermer.</p>
+          <h3>Calques <small id="compte-calques"></small></h3>
+          <div class="boutons petits">
+            <button id="tout-cocher">Tout garder</button>
+            <button id="tout-decocher">Tout écarter</button>
+          </div>
+          <input id="filtre-calques" type="search" placeholder="Filtrer les calques…">
+          <p class="aide">Astuce : cliquez un objet sur la vue pour connaître son calque.</p>
+          <ul id="liste-calques"></ul>
+          <button id="exporter" class="principal">Créer le DXF calé et la recette</button>
+        </div>
+      </div>
+
+      <div class="etape" data-etape="4">
+        <h2><span class="num">4</span> Résultat</h2>
+        <div class="contenu">
+          <div id="resultat-export"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------ ONGLET NOUVEL INDICE -->
+    <section id="onglet-indice" hidden>
+      <div class="etape ouverte">
+        <h2><span class="num">1</span> Projet</h2>
+        <div class="contenu">
+          <select id="choix-projet"></select>
+          <p class="aide" id="info-projet"></p>
+        </div>
+      </div>
+      <div class="etape ouverte">
+        <h2><span class="num">2</span> Nouvel indice</h2>
+        <div class="contenu">
+          <label class="depot" data-role="indice">
+            <input type="file" accept=".dxf,.dwg" hidden>
+            <b>Plan du nouvel indice</b><span>DWG ou DXF</span>
+            <em class="etat"></em>
+          </label>
+          <label class="depot petit" data-role="indice_xref">
+            <input type="file" accept=".dxf,.dwg" multiple hidden>
+            <b>Xrefs</b><span>facultatif</span>
+            <em class="etat"></em>
+          </label>
+          <label class="case"><input type="checkbox" id="ecarter-nouveaux"> Écarter les calques jamais vus
+            (par défaut : gardés et signalés)</label>
+          <button id="caler-indice" class="principal" disabled>Caler ce plan</button>
+        </div>
+      </div>
+      <div class="etape ouverte">
+        <h2><span class="num">3</span> Résultat</h2>
+        <div class="contenu"><div id="resultat-indice"><p class="aide">—</p></div></div>
+      </div>
+    </section>
+  </aside>
+
+  <!-- =========================================================== VUES -->
+  <section id="vues">
+    <div id="vue-double" class="vues-double">
+      <div class="cadre"><div class="titre-vue">Plan à caler</div><canvas id="c-plan"></canvas>
+        <div class="outils"><button data-ajuster="plan">Tout voir</button></div></div>
+      <div class="cadre"><div class="titre-vue">Référence MN95</div><canvas id="c-ref"></canvas>
+        <div class="outils"><button data-ajuster="ref">Tout voir</button></div></div>
+    </div>
+    <div id="vue-unique" class="cadre" hidden>
+      <div class="titre-vue" id="titre-unique">Superposition</div>
+      <canvas id="c-unique"></canvas>
+      <div class="outils">
+        <button data-ajuster="unique">Tout voir</button>
+        <label class="case" id="case-couleurs"><input type="checkbox" id="couleurs-calques" checked> Couleurs des calques</label>
+      </div>
+      <div id="info-objet" hidden></div>
+    </div>
+    <div id="accueil" class="accueil">
+      <p>Déposez la <b>référence MN95</b> et le <b>plan à caler</b> à gauche.</p>
+    </div>
+  </section>
+</main>
+
+<div id="toast" hidden></div>
+<div id="attente" hidden><div class="roue"></div><p id="attente-texte">Traitement…</p></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
