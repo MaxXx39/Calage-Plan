@@ -1,13 +1,17 @@
 """État de travail de l'appli et opérations appelées par la page web.
 
-Un seul utilisateur, en local : l'état est simplement gardé en mémoire.
-Dossier de travail (modifiable par la variable d'environnement CALAGE_DOSSIER) :
-    ~/CalagePlans/projets/<projet>/recette.json + la référence
-    ~/CalagePlans/sorties/            DXF calés et rapports
-    ~/CalagePlans/travail/            fichiers déposés (temporaires)
+Un seul utilisateur, en local : l'état est gardé en mémoire.
+Rangement sur disque (dossier modifiable par la variable d'environnement CALAGE_DOSSIER) :
+
+    ~/CalagePlans/chantiers/<chantier>/reference.dwg|dxf          fond MN95 du chantier
+    ~/CalagePlans/chantiers/<chantier>/plans/<type>/recette.json  recette du type de plan
+    ~/CalagePlans/chantiers/<chantier>/plans/<type>/indices/<date>_<indice>/
+            plan d'origine, DXF calé, rapport.json, info.json
+    ~/CalagePlans/travail/                                         fichiers déposés (temporaires)
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
@@ -17,50 +21,74 @@ import threading
 import uuid
 from pathlib import Path
 
+import numpy as np
+
+from calage_core.appariement import IndexCible, apparier, points_denses
 from calage_core.application import appliquer
+from calage_core.estimation import estimer
 from calage_core.explosion import exploser_document
+from calage_core.geometrie import tableau_segments
 from calage_core.lecture import lire_plan
-from calage_core.points import calage_par_points
-from calage_core.recette import Recette
+from calage_core.points import calage_mixte, evaluer
+from calage_core.recette import UNITES_INSUNITS
 from calage_core.recette_manuelle import (FAMILLES_PAR_DEFAUT, FAMILLES_SUPPRIMABLES,
                                           construire_recette)
 from calage_core.vue import PlanAffiche
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
+TYPES_PLAN_SUGGERES = ["Terrassement", "Canalisations", "Travaux spéciaux", "Coffrage",
+                       "Architecte", "Implantation", "Façades", "Aménagements extérieurs"]
+
 
 class ErreurAppli(Exception):
     """Erreur à afficher telle quelle à l'utilisateur."""
 
 
-def nom_sur(nom: str, defaut: str = "fichier") -> str:
-    """Nom de fichier sans chemin ni caractères gênants."""
-    nom = os.path.basename(nom.replace("\\", "/")).strip()
+def nom_sur(nom: str, defaut: str = "sans-nom") -> str:
+    """Nom de fichier / dossier sans chemin ni caractères gênants."""
+    nom = os.path.basename(str(nom or "").replace("\\", "/")).strip().strip(".")
     nom = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", nom)
-    return nom or defaut
+    return nom[:80] or defaut
 
 
 class Session:
     def __init__(self, racine: str | Path | None = None):
         self.racine = Path(racine or os.environ.get("CALAGE_DOSSIER") or Path.home() / "CalagePlans")
-        for d in ("projets", "sorties", "travail"):
+        for d in ("chantiers", "travail"):
             (self.racine / d).mkdir(parents=True, exist_ok=True)
         self.verrou = threading.RLock()
-        self.dossiers = {}          # rôle -> dossier de travail ("plan", "ref", "indice")
-        self.fichiers = {}          # rôle -> chemin du fichier principal
-        self.lus = {}               # rôle -> PlanLu
-        self.elements = {}          # rôle -> éléments explosés
-        self.affiches = {}          # rôle -> PlanAffiche
+        self.dossiers, self.fichiers, self.lus, self.elements, self.affiches = {}, {}, {}, {}, {}
         self.calage = None
-        self.paires = ([], [])
-        self.telechargements = {}   # id -> chemin
-        self._cache_ref_projet = {}
+        self.telechargements = {}
+        self._cache_geo = {}        # chemin -> (mtime, géométrie)
 
-    # ------------------------------------------------------------------ fichiers déposés
+    # ================================================================== chemins
+    def _d_chantier(self, chantier: str) -> Path:
+        return self.racine / "chantiers" / nom_sur(chantier)
+
+    def _d_type(self, chantier: str, type_plan: str) -> Path:
+        return self._d_chantier(chantier) / "plans" / nom_sur(type_plan)
+
+    def _reference_chantier(self, chantier: str) -> Path | None:
+        refs = sorted(self._d_chantier(chantier).glob("reference.*"))
+        return refs[0] if refs else None
+
+    def _chemin_indice(self, ident: str) -> Path:
+        """ident = « chantier/type/dossier_indice » -> dossier, sans sortir de la racine."""
+        morceaux = [nom_sur(m) for m in ident.split("/")]
+        if len(morceaux) != 3:
+            raise ErreurAppli("Identifiant de plan invalide.")
+        d = self.racine / "chantiers" / morceaux[0] / "plans" / morceaux[1] / "indices" / morceaux[2]
+        if not d.is_dir():
+            raise ErreurAppli("Plan calé introuvable.")
+        return d
+
+    # ================================================================== fichiers déposés
     def deposer(self, role: str, nom: str, contenu: bytes) -> dict:
         if role not in ("ref", "plan", "xref", "indice", "indice_xref"):
             raise ErreurAppli(f"Rôle de fichier inconnu : {role}")
-        nom = nom_sur(nom)
+        nom = nom_sur(nom, "fichier")
         with self.verrou:
             principal = role in ("ref", "plan", "indice")
             cle = {"xref": "plan", "indice_xref": "indice"}.get(role, role)
@@ -82,6 +110,16 @@ class Session:
                     self.calage = None
             return {"ok": True, "nom": nom}
 
+    def utiliser_reference_chantier(self, chantier: str) -> dict:
+        ref = self._reference_chantier(chantier)
+        if ref is None:
+            raise ErreurAppli("Ce chantier n'a pas encore de référence : déposez-la.")
+        with self.verrou:
+            self.fichiers["ref"] = ref
+            for dico in (self.lus, self.elements, self.affiches):
+                dico.pop("ref", None)
+        return self.ouvrir("ref")
+
     def ouvrir(self, role: str) -> dict:
         with self.verrou:
             if role not in self.fichiers:
@@ -94,53 +132,135 @@ class Session:
             alertes = list(plan.avertissements)
             for x in ex.xrefs:
                 if x.statut.startswith("VIDE"):
-                    alertes.append(f"Xref « {x.nom} » introuvable : déposez le fichier "
-                                   f"« {Path(x.chemin.replace(chr(92), '/')).name or x.nom} » puis rechargez.")
+                    nom_x = Path(x.chemin.replace("\\", "/")).name or x.nom
+                    alertes.append(f"Xref « {x.nom} » introuvable : déposez le fichier « {nom_x} » "
+                                   "dans « Xrefs du plan ».")
             alertes += ex.erreurs
-            from calage_core.recette import UNITES_INSUNITS
             return {"nom": chemin.name, "unite": UNITES_INSUNITS.get(plan.insunits, "?"),
-                    "nb_entites": len(ex.elements),
-                    "xrefs": [x.__dict__ for x in ex.xrefs], "alertes": alertes,
-                    "geometrie": aff.vers_dict()}
+                    "nb_entites": len(ex.elements), "xrefs": [x.__dict__ for x in ex.xrefs],
+                    "alertes": alertes, "geometrie": aff.vers_dict()}
 
-    def accrocher(self, role: str, x: float, y: float, rayon: float) -> dict:
+    def accrocher(self, role: str, x: float, y: float, rayon: float, mode: str = "point") -> dict:
         aff = self.affiches.get(role)
         if aff is None:
             raise ErreurAppli("Plan non chargé.")
+        if mode == "axe":
+            s = aff.segment_proche(x, y, rayon)
+            return {"aucun": True} if s is None else {"segment": s, "genre": "axe"}
         r = aff.accrocher(x, y, rayon)
-        if r is None:
-            return {"aucun": True}
-        return {"x": r[0], "y": r[1], "genre": r[2]}
+        return {"aucun": True} if r is None else {"x": r[0], "y": r[1], "genre": r[2]}
 
-    # ------------------------------------------------------------------ calage
-    def caler(self, calage: list, controle: list) -> dict:
-        paires_c = [(tuple(p), tuple(q)) for p, q in calage]
-        paires_k = [(tuple(p), tuple(q)) for p, q in controle]
+    # ================================================================== calage
+    def caler(self, elements: list, auto: bool = False) -> dict:
         try:
-            res = calage_par_points(paires_c, paires_k)
+            if auto:
+                if self.calage is None or self.calage.methode != "automatique":
+                    raise ErreurAppli("Pas de calage automatique en cours.")
+                res = evaluer(self.calage.similitude, elements, "automatique",
+                              self.calage.echelle_brute, self.calage.confiance)
+            else:
+                res = calage_mixte(elements)
+        except ErreurAppli:
+            raise
         except Exception as ex:
             raise ErreurAppli(str(ex))
         with self.verrou:
             self.calage = res
-            self.paires = (paires_c, paires_k)
         return res.vers_dict()
 
+    def calage_auto(self, chantier: str | None) -> dict:
+        """Cherche le calage en comparant le plan aux plans déjà calés du chantier et à la référence."""
+        with self.verrou:
+            if "plan" not in self.elements:
+                raise ErreurAppli("Plan non chargé.")
+            cibles, sources = [], []
+            if chantier:
+                for d_type in sorted((self._d_chantier(chantier) / "plans").glob("*")):
+                    dernier = self._dernier_indice(d_type)
+                    if dernier is not None:
+                        info = json.loads((dernier / "info.json").read_text(encoding="utf-8"))
+                        sortie = dernier / info["fichier_sortie"]
+                        if sortie.exists():
+                            ex = exploser_document(lire_plan(sortie).doc)
+                            cibles.append(tableau_segments(e.entite for e in ex.elements))
+                            sources.append(f"{d_type.name} ({info.get('indice') or info['plan']})")
+            if "ref" in self.elements:
+                cibles.append(tableau_segments(e.entite for e in self.elements["ref"]))
+                sources.append("référence")
+            if not cibles:
+                raise ErreurAppli("Rien à comparer : chargez la référence ou calez d'abord un autre plan du chantier.")
+            segs_cible = np.vstack([c for c in cibles if len(c)]) if any(len(c) for c in cibles) else np.zeros((0, 4))
+            segs_plan = tableau_segments(e.entite for e in self.elements["plan"])
+            cal = estimer(segs_plan, segs_cible)
+            if cal is None:
+                raise ErreurAppli("Aucun calage automatique trouvé : calez à la main (points ou axes).")
+            v, i = cal.vote, cal.icp
+            dom = min(v.dominance, 99.0)
+            if dom >= 2 and v.score >= 15 and i.nb_points >= 30 and i.ecart_moyen < 0.01:
+                niveau = "forte"
+            elif dom >= 1.5 and v.score >= 8 and i.nb_points >= 15 and i.ecart_moyen < 0.02:
+                niveau = "moyenne"
+            else:
+                niveau = "faible"
+            confiance = {"niveau": niveau, "points_concordants": i.nb_points,
+                         "ecart_moyen_mm": round(i.ecart_moyen * 1000, 1), "votes": v.score,
+                         "dominance": round(dom, 1), "compare_avec": sources}
+            res = evaluer(cal.similitude, [], "automatique", abs(cal.icp.similitude.echelle), confiance)
+            res.verdict = "sans contrôle"
+            res.message = {
+                "forte": "Calage automatique trouvé, confiance FORTE. Vérifiez la superposition et "
+                         "ajoutez un point de contrôle.",
+                "moyenne": "Calage automatique trouvé, confiance MOYENNE : vérifiez soigneusement "
+                           "avec un ou deux points de contrôle.",
+                "faible": "Calage automatique INCERTAIN : probablement faux. Calez à la main.",
+            }[niveau]
+            self.calage = res
+            return res.vers_dict()
+
     def familles(self) -> dict:
-        elems = self.elements.get("plan", [])
         presents = {}
-        for el in elems:
+        for el in self.elements.get("plan", []):
             presents[el.entite.dxftype()] = presents.get(el.entite.dxftype(), 0) + 1
         out = []
         for lib, types in FAMILLES_SUPPRIMABLES.items():
             n = sum(presents.get(t, 0) for t in types)
             if n:
-                out.append({"libelle": lib, "types": types, "n": n,
-                            "coche": lib in FAMILLES_PAR_DEFAUT})
+                out.append({"libelle": lib, "types": types, "n": n, "coche": lib in FAMILLES_PAR_DEFAUT})
         return {"familles": out}
 
-    # ------------------------------------------------------------------ export (indice A)
-    def exporter(self, nom_projet: str, prefixe: str, calques_gardes: list, familles: list,
-                 zone, renommages: dict | None = None) -> dict:
+    # ================================================================== chantiers
+    def chantiers(self) -> dict:
+        out = []
+        for d in sorted((self.racine / "chantiers").iterdir(), key=lambda p: p.name.lower()):
+            if not d.is_dir():
+                continue
+            ref = self._reference_chantier(d.name)
+            types = []
+            for t in sorted((d / "plans").glob("*"), key=lambda p: p.name.lower()):
+                r = t / "recette.json"
+                if not r.exists():
+                    continue
+                data = json.loads(r.read_text(encoding="utf-8"))
+                indices = []
+                for di in sorted((t / "indices").glob("*"), reverse=True):
+                    try:
+                        info = json.loads((di / "info.json").read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    indices.append({"id": f"{d.name}/{t.name}/{di.name}", **{
+                        k: info.get(k) for k in ("indice", "date", "plan", "mode", "nb_entites")}})
+                types.append({"type": t.name, "cree_le": data.get("cree_le", ""),
+                              "plan": data.get("source", {}).get("plan", ""), "indices": indices})
+            out.append({"nom": d.name, "reference": ref.name if ref else None, "types": types})
+        return {"chantiers": out, "types_suggeres": TYPES_PLAN_SUGGERES}
+
+    def _dernier_indice(self, d_type: Path) -> Path | None:
+        ind = sorted((d_type / "indices").glob("*/info.json"))
+        return ind[-1].parent if ind else None
+
+    # ================================================================== export (premier plan)
+    def exporter(self, chantier: str, type_plan: str, indice: str, prefixe: str,
+                 calques_gardes: list, familles: list, zone, renommages: dict | None = None) -> dict:
         with self.verrou:
             if self.calage is None:
                 raise ErreurAppli("Faites d'abord le calage.")
@@ -148,87 +268,147 @@ class Session:
                 raise ErreurAppli("Plan non chargé.")
             if not calques_gardes:
                 raise ErreurAppli("Aucun calque gardé : le résultat serait vide.")
-            nom_projet = nom_sur(nom_projet, "projet")
+            if not (chantier or "").strip() or not (type_plan or "").strip():
+                raise ErreurAppli("Indiquez le chantier et le type de plan.")
             types = [t for lib, ts in FAMILLES_SUPPRIMABLES.items() if lib in familles for t in ts]
+            d_ch = self._d_chantier(chantier)
+            d_ch.mkdir(parents=True, exist_ok=True)
             ref = self.fichiers.get("ref")
+            if ref and ref.parent != d_ch:          # nouvelle référence -> devient celle du chantier
+                for vieux in d_ch.glob("reference.*"):
+                    vieux.unlink()
+                shutil.copy2(ref, d_ch / f"reference{ref.suffix.lower()}")
+                self.fichiers["ref"] = d_ch / f"reference{ref.suffix.lower()}"
             recette = construire_recette(
                 self.fichiers["plan"], self.lus["plan"], self.elements["plan"], self.calage,
-                self.paires[0], self.paires[1], calques_gardes, types, prefixe, zone,
-                nom_reference=ref.name if ref else None, renommages=renommages)
-            dossier = self.racine / "projets" / nom_projet
-            dossier.mkdir(parents=True, exist_ok=True)
-            chemin_recette = dossier / "recette.json"
-            if chemin_recette.exists():   # on garde l'ancienne version
-                shutil.copy2(chemin_recette, dossier / "recette.precedente.json")
+                calques_gardes, types, prefixe, zone,
+                nom_reference=ref.name if ref else None, renommages=renommages,
+                chantier=d_ch.name, type_plan=nom_sur(type_plan))
+            d_t = self._d_type(chantier, type_plan)
+            d_t.mkdir(parents=True, exist_ok=True)
+            chemin_recette = d_t / "recette.json"
+            if chemin_recette.exists():   # on archive l'ancienne recette
+                horo = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+                shutil.copy2(chemin_recette, d_t / f"recette.{horo}.json")
             recette.enregistrer(chemin_recette)
-            if ref:
-                for vieux in dossier.glob("reference.*"):
-                    vieux.unlink()
-                shutil.copy2(ref, dossier / f"reference{ref.suffix.lower()}")
-                self._cache_ref_projet.pop(nom_projet, None)
-            return self._appliquer("plan", nom_projet, forcer=False, ecarter_nouveaux=False)
+            return self._appliquer("plan", chantier, type_plan, indice, False, False)
 
-    # ------------------------------------------------------------------ indices suivants
-    def projets(self) -> dict:
-        out = []
-        for d in sorted((self.racine / "projets").iterdir(), key=lambda p: p.name.lower()):
-            r = d / "recette.json"
-            if not r.exists():
-                continue
-            try:
-                data = json.loads(r.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            out.append({"nom": d.name, "cree_le": data.get("cree_le", ""),
-                        "plan": data.get("source", {}).get("plan", ""),
-                        "reference": data.get("source", {}).get("reference")})
-        return {"projets": out}
-
-    def caler_indice(self, projet: str, forcer: bool, ecarter_nouveaux: bool) -> dict:
+    # ================================================================== indices suivants
+    def caler_indice(self, chantier, type_plan, indice, forcer, ecarter_nouveaux) -> dict:
         with self.verrou:
             if "indice" not in self.fichiers:
                 raise ErreurAppli("Déposez d'abord le nouvel indice.")
-            return self._appliquer("indice", nom_sur(projet), forcer, ecarter_nouveaux)
+            return self._appliquer("indice", chantier, type_plan, indice, forcer, ecarter_nouveaux)
 
-    def _appliquer(self, role, projet, forcer, ecarter_nouveaux) -> dict:
-        dossier = self.racine / "projets" / projet
-        chemin_recette = dossier / "recette.json"
+    def _appliquer(self, role, chantier, type_plan, indice, forcer, ecarter_nouveaux) -> dict:
+        d_t = self._d_type(chantier, type_plan)
+        chemin_recette = d_t / "recette.json"
         if not chemin_recette.exists():
-            raise ErreurAppli(f"Projet « {projet} » introuvable.")
+            raise ErreurAppli(f"Type de plan « {type_plan} » introuvable pour le chantier « {chantier} ».")
         plan = self.fichiers[role]
-        sortie = self.racine / "sorties" / f"{Path(plan).stem}_MN95.dxf"
-        chemin_rapport = sortie.with_suffix(".rapport.json")
-        if sortie.exists():
-            sortie.unlink()
+        horo = dt.datetime.now()
+        d_i = d_t / "indices" / f"{horo:%Y%m%d-%H%M%S}_{nom_sur(indice or Path(plan).stem)}"
+        d_i.mkdir(parents=True)
+        sortie = d_i / f"{Path(plan).stem}_MN95.dxf"
         rap = appliquer(plan, chemin_recette, sortie, forcer=forcer,
-                        ecarter_nouveaux=ecarter_nouveaux, chemin_rapport=chemin_rapport)
-        reponse = {"rapport": rap.vers_dict(), "texte": rap.texte(), "projet": projet,
-                   "recette": json.loads(chemin_recette.read_text(encoding="utf-8")).get("transformation")}
+                        ecarter_nouveaux=ecarter_nouveaux, chemin_rapport=d_i / "rapport.json")
+        try:   # copie du plan d'origine (pour pouvoir comparer / refaire plus tard)
+            shutil.copy2(plan, d_i / Path(plan).name)
+        except Exception:
+            pass
+        info = {"indice": indice or "", "date": horo.isoformat(timespec="seconds"),
+                "plan": Path(plan).name, "mode": rap.mode, "fichier_produit": rap.fichier_produit,
+                "fichier_sortie": sortie.name if rap.fichier_produit else None,
+                "nb_entites": rap.nb_entites_sortie}
+        if not rap.fichier_produit:
+            # un refus n'est pas un indice calé : on garde le rapport à part
+            refus = d_t / "refus"
+            refus.mkdir(exist_ok=True)
+            shutil.move(str(d_i), str(refus / d_i.name))
+            d_i = refus / d_i.name
+        else:
+            (d_i / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+        reponse = {"rapport": rap.vers_dict(), "texte": rap.texte(), "chantier": nom_sur(chantier),
+                   "type_plan": nom_sur(type_plan)}
         if rap.fichier_produit:
             ident = uuid.uuid4().hex[:16]
-            self.telechargements[ident] = sortie
+            self.telechargements[ident] = d_i / sortie.name
             reponse["telecharger"] = f"/telecharger?id={ident}"
-            reponse["chemin_sortie"] = str(sortie)
-            doc = lire_plan(sortie)
-            reponse["resultat"] = PlanAffiche(doc.doc, exploser_document(doc.doc).elements).vers_dict()
-        ref = self._reference_projet(projet)
+            reponse["chemin_sortie"] = str(d_i / sortie.name)
+            reponse["resultat"] = self._geometrie(d_i / sortie.name)
+            reponse["id"] = f"{nom_sur(chantier)}/{nom_sur(type_plan)}/{d_i.name}"
+        ref = self._reference_chantier(chantier)
         if ref is not None:
-            reponse["reference"] = ref
+            reponse["reference"] = self._geometrie(ref)
         return reponse
 
-    def _reference_projet(self, projet):
-        if projet in self._cache_ref_projet:
-            return self._cache_ref_projet[projet]
-        refs = list((self.racine / "projets" / projet).glob("reference.*"))
-        if not refs:
-            return None
-        try:
-            p = lire_plan(refs[0])
-            g = PlanAffiche(p.doc, exploser_document(p.doc, refs[0].parent).elements).vers_dict()
-        except Exception:
-            return None
-        self._cache_ref_projet[projet] = g
+    def _geometrie(self, chemin: Path, elements=None):
+        cle = str(chemin)
+        mt = chemin.stat().st_mtime
+        if elements is None and cle in self._cache_geo and self._cache_geo[cle][0] == mt:
+            return self._cache_geo[cle][1]
+        p = lire_plan(chemin)
+        g = PlanAffiche(p.doc, elements if elements is not None else
+                        exploser_document(p.doc, chemin.parent).elements).vers_dict()
+        if elements is None:
+            self._cache_geo[cle] = (mt, g)
         return g
+
+    # ================================================================== comparaison
+    def comparer(self, ids: list[str], mode: str) -> dict:
+        if not ids:
+            raise ErreurAppli("Choisissez au moins un plan calé.")
+        plans = []
+        for ident in ids:
+            d = self._chemin_indice(ident)
+            info = json.loads((d / "info.json").read_text(encoding="utf-8"))
+            plans.append((ident, d / info["fichier_sortie"], info))
+        chantier = ids[0].split("/")[0]
+        ref = self._reference_chantier(chantier)
+        rep = {"reference": self._geometrie(ref) if ref else None}
+        if mode == "differences":
+            if len(plans) != 2:
+                raise ErreurAppli("Pour voir les différences, choisissez exactement 2 plans.")
+            rep.update(self._differences(plans[0], plans[1]))
+        else:
+            rep["calques"] = [{"id": i, "nom": f"{i.split('/')[1]} — {inf.get('indice') or inf['plan']}",
+                               "geometrie": self._geometrie(f)} for i, f, inf in plans]
+        return rep
+
+    def _differences(self, ancien, nouveau, tol: float = 0.01) -> dict:
+        """Objets inchangés / ajoutés (dans le nouveau seulement) / supprimés (dans l'ancien seulement)."""
+        (_, f_a, inf_a), (_, f_b, inf_b) = ancien, nouveau
+        doc_a, doc_b = lire_plan(f_a).doc, lire_plan(f_b).doc
+        ea, eb = exploser_document(doc_a).elements, exploser_document(doc_b).elements
+        ia, ib = IndexCible.construire(ea, points_denses), IndexCible.construire(eb, points_denses)
+        inchanges, ajoutes, supprimes = [], [], []
+        par_calque = {}
+        for el in eb:
+            pts = points_denses(el.entite)
+            (inchanges if (not pts or apparier(pts, ia, None, tol).retrouve) else ajoutes).append(el)
+        for el in ea:
+            pts = points_denses(el.entite)
+            if pts and not apparier(pts, ib, None, tol).retrouve:
+                supprimes.append(el)
+        for genre, liste in (("ajoutes", ajoutes), ("supprimes", supprimes)):
+            for el in liste:
+                par_calque.setdefault(el.calque, {"ajoutes": 0, "supprimes": 0})[genre] += 1
+
+        def geo(doc, els):
+            return PlanAffiche(doc, els).vers_dict() if els else None
+
+        return {
+            "ancien": inf_a.get("indice") or inf_a["plan"], "nouveau": inf_b.get("indice") or inf_b["plan"],
+            "inchanges": geo(doc_b, inchanges), "ajoutes": geo(doc_b, ajoutes),
+            "supprimes": geo(doc_a, supprimes),
+            "compte": {"inchanges": len(inchanges), "ajoutes": len(ajoutes), "supprimes": len(supprimes)},
+            "par_calque": dict(sorted(par_calque.items(), key=lambda kv: -sum(kv[1].values()))),
+        }
 
     def chemin_telechargement(self, ident: str) -> Path | None:
         return self.telechargements.get(ident)
+
+    def telecharger_indice(self, ident: str) -> Path:
+        d = self._chemin_indice(ident)
+        info = json.loads((d / "info.json").read_text(encoding="utf-8"))
+        return d / info["fichier_sortie"]

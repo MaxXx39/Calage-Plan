@@ -71,10 +71,13 @@ def fabriquer_gestionnaire(session: Session):
                     if STATIQUE.resolve() in f.parents and f.is_file():
                         return self._fichier(f)
                     return self._json({"erreur": "introuvable"}, 404)
-                if url.path == "/api/projets":
-                    return self._json(session.projets())
+                if url.path == "/api/chantiers":
+                    return self._json(session.chantiers())
                 if url.path == "/api/familles":
                     return self._json(session.familles())
+                if url.path == "/telecharger_indice":
+                    f = session.telecharger_indice(q.get("id", [""])[0])
+                    return self._fichier(f, f.name)
                 if url.path == "/telecharger":
                     f = session.chemin_telechargement(q.get("id", [""])[0])
                     if f is None or not f.exists():
@@ -95,18 +98,25 @@ def fabriquer_gestionnaire(session: Session):
                 d = json.loads(self._corps() or b"{}")
                 if url.path == "/api/ouvrir":
                     return self._json(session.ouvrir(d["role"]))
+                if url.path == "/api/reference_chantier":
+                    return self._json(session.utiliser_reference_chantier(d["chantier"]))
                 if url.path == "/api/accroche":
                     return self._json(session.accrocher(d["role"], float(d["x"]), float(d["y"]),
-                                                        float(d["rayon"])))
+                                                        float(d["rayon"]), d.get("mode", "point")))
                 if url.path == "/api/calage":
-                    return self._json(session.caler(d["calage"], d.get("controle", [])))
+                    return self._json(session.caler(d["elements"], bool(d.get("auto"))))
+                if url.path == "/api/calage_auto":
+                    return self._json(session.calage_auto(d.get("chantier")))
                 if url.path == "/api/exporter":
-                    return self._json(session.exporter(d["projet"], d.get("prefixe", ""),
-                                                       d["calques"], d.get("familles", []),
-                                                       d.get("zone"), d.get("renommages")))
+                    return self._json(session.exporter(
+                        d["chantier"], d["type_plan"], d.get("indice", ""), d.get("prefixe", ""),
+                        d["calques"], d.get("familles", []), d.get("zone"), d.get("renommages")))
                 if url.path == "/api/indice":
-                    return self._json(session.caler_indice(d["projet"], bool(d.get("forcer")),
-                                                           bool(d.get("ecarter_nouveaux"))))
+                    return self._json(session.caler_indice(
+                        d["chantier"], d["type_plan"], d.get("indice", ""), bool(d.get("forcer")),
+                        bool(d.get("ecarter_nouveaux"))))
+                if url.path == "/api/comparer":
+                    return self._json(session.comparer(d["ids"], d.get("mode", "superposer")))
                 return self._json({"erreur": "introuvable"}, 404)
             except Exception as ex:
                 return self._erreur(ex)

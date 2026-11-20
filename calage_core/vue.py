@@ -63,7 +63,7 @@ class PlanAffiche:
         pts_tous = [p for el in elements for p in points_echantillon(el.entite)]
         arr = np.asarray(pts_tous) if pts_tous else np.zeros((1, 2))
         # emprise robuste (ignore les points aberrants très éloignés)
-        lo = np.percentile(arr, 0.5, axis=0); hi = np.percentile(arr, 99.5, axis=0)
+        lo = np.percentile(arr, 2, axis=0); hi = np.percentile(arr, 98, axis=0)
         self.emprise = [float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1])]
         self.origine = ((lo + hi) / 2).round(0)
         taille = float(max(hi - lo)) or 1.0
@@ -148,6 +148,10 @@ class PlanAffiche:
         }
 
     # ---------------------------------------------------------------------------------------
+    def segment_proche(self, x: float, y: float, rayon: float):
+        """Segment droit le plus proche (pour désigner un axe) : [x1, y1, x2, y2] ou None."""
+        return _segment_proche_impl(self.segs, x, y, rayon)
+
     def accrocher(self, x: float, y: float, rayon: float):
         """Point remarquable le plus proche de (x, y) dans le rayon : sommet, centre ou intersection.
 
@@ -181,6 +185,24 @@ class PlanAffiche:
         cands.sort(key=lambda c: c[0])
         _, px, py, genre = cands[0]
         return px, py, genre
+
+
+def _segment_proche_impl(segs, x, y, rayon):
+    if not len(segs):
+        return None
+    p0, p1 = segs[:, :2], segs[:, 2:]
+    d = p1 - p0
+    L2 = (d ** 2).sum(1)
+    L2[L2 == 0] = 1e-12
+    tt = np.clip(((x - p0[:, 0]) * d[:, 0] + (y - p0[:, 1]) * d[:, 1]) / L2, 0, 1)
+    proj = p0 + d * tt[:, None]
+    dist = np.hypot(proj[:, 0] - x, proj[:, 1] - y)
+    # à distance égale (segments superposés), préférer le plus long : plus précis pour un axe
+    score = dist - 1e-6 * np.sqrt(L2)
+    i = int(np.argmin(score))
+    if dist[i] > rayon:
+        return None
+    return [float(v) for v in segs[i]]
 
 
 def _intersection(s1, s2, marge: float = 0.0):

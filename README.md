@@ -29,21 +29,25 @@ python -m calage interface
 ```
 
 Une page s'ouvre dans le navigateur (servie sur 127.0.0.1 : aucun fichier ne quitte le poste).
+Les plans sont rangés **par chantier et par type de plan** (Terrassement, Canalisations,
+Travaux spéciaux…) dans `~/CalagePlans/chantiers/<chantier>/plans/<type>/`.
 
-**Nouveau projet (indice A)** — une fois par projet :
-1. *Fichiers* : déposer la référence MN95, le plan à caler, et ses xrefs s'ils ne sont pas liés.
-2. *Calage sur 3 points* : cliquer un point sur le plan puis le même sur la référence, 3 fois
-   (accrochage aux sommets, centres, intersections). Points 1 et 2 calent, le point 3 contrôle :
-   vert < 1 cm, orange < 5 cm, rouge au-delà. L'échelle est arrondie à la puissance de 10.
-3. *Nettoyage* : cocher les calques à garder, les types à supprimer (cotations, lignes de repère,
-   attributs, hachures…), le préfixe des calques, dessiner la zone à garder (facultatif).
-   Cliquer un objet sur la vue donne son calque.
-4. *Résultat* : DXF calé (R2000, mètres, blocs éclatés) à télécharger ; la recette est enregistrée
-   dans `~/CalagePlans/projets/<projet>/`.
+**Caler un nouveau plan** — une fois par type de plan :
+1. *Chantier et fichiers* : chantier, type de plan, indice ; référence MN95 (reprise automatiquement
+   si le chantier en a déjà une), plan à caler, xrefs éventuels.
+2. *Calage* : soit **Calage automatique** (cherche les éléments communs avec les plans déjà calés du
+   chantier et la référence, avec un niveau de confiance), soit à la main avec des **points** et/ou des
+   **axes** (ex. 2 axes + 1 point). L'accroche (sommet □, centre ○, intersection ×, ligne) s'affiche
+   avant le clic. Un élément de **contrôle** vérifie le calage (vert < 1 cm, orange < 5 cm, rouge).
+3. *Nettoyage* : un clic sur un objet sélectionne **tout son calque** (mode « Écarter au clic »,
+   Annuler / Ctrl+Z, touche Suppr) ; types à supprimer ; préfixe ; zone à garder.
+4. *Résultat* : DXF calé (R2000, mètres, blocs éclatés) + recette enregistrée.
 
-**Nouvel indice** : choisir le projet, déposer le plan, « Caler ce plan ». L'appli contrôle d'abord
-que le plan a la même origine (sinon : recalage automatique signalé, ou refus), puis rejoue le
-nettoyage et le calage.
+**Nouvel indice** : chantier, type de plan, dépôt du plan. Contrôle de concordance (rejeu, recalage
+automatique signalé, ou refus), nettoyage et calage rejoués.
+
+**Chantiers et comparaison** : liste des indices calés (téléchargement), **superposition** de plans
+(types différents, couleurs distinctes) et **différences** entre deux indices (nouveau / supprimé).
 
 ## Ligne de commande
 

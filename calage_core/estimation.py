@@ -278,6 +278,41 @@ def estimer(segs_src: np.ndarray, segs_cible: np.ndarray, pts_src: np.ndarray | 
         pts_src = points_segments(segs_src)
     if pts_cible is None:
         pts_cible = points_segments(segs_cible)
-    # échelle libre puis snappée (ou imposée par l'appelant)
-    res = icp(pts_src, pts_cible, vote.similitude, echelle_fixe=echelle_fixe)
-    return Calage(vote, res)
+    # ICP dans les deux sens, et on garde le meilleur.
+    # Pourquoi : l'ICP part de chaque point SOURCE vers son plus proche voisin. Si la source contient
+    # beaucoup de géométrie absente de la cible (réseaux, hachures…), ces points « parasites »
+    # trouvent de faux voisins et font dériver la solution. Dans l'autre sens, c'est la géométrie
+    # propre à la cible qui gêne. L'un des deux sens est presque toujours sain.
+    directe = icp(pts_src, pts_cible, vote.similitude, echelle_fixe=echelle_fixe)
+    candidats = [directe]
+    try:
+        e_inv = None if echelle_fixe is None else 1.0 / echelle_fixe
+        inv = icp(pts_cible, pts_src, vote.similitude.inverse(), echelle_fixe=e_inv)
+        sim_inv = inv.similitude.inverse()
+        if echelle_fixe is not None or abs(snap_echelle(sim_inv.echelle) / sim_inv.echelle - 1) < 0.01:
+            sim_inv.echelle = snap_echelle(sim_inv.echelle) if echelle_fixe is None else echelle_fixe
+        candidats.append(statistiques(sim_inv, pts_src, pts_cible, inv.historique))
+    except Exception:
+        pass
+    meilleur = max(candidats, key=lambda r: concordance(r.similitude, pts_src, pts_cible))
+    return Calage(vote, meilleur)
+
+
+def concordance(sim: Similitude, pts_src: np.ndarray, pts_cible: np.ndarray, tol: float = 0.01) -> int:
+    """Nombre de points (du plus petit des deux jeux) ayant un homologue à < tol."""
+    ts = sim.appliquer(pts_src)
+    if len(pts_cible) <= len(ts):
+        d, _ = cKDTree(ts).query(pts_cible)
+    else:
+        d, _ = cKDTree(pts_cible).query(ts)
+    return int((d < tol).sum())
+
+
+def statistiques(sim: Similitude, pts_src, pts_cible, historique=None, seuil=SEUILS_ICP[-1]) -> ResultatICP:
+    """Indicateurs d'un calage (points source à < seuil, écart moyen…) dans le sens source -> cible."""
+    d, _ = cKDTree(pts_cible).query(sim.appliquer(pts_src))
+    proches = d < seuil
+    return ResultatICP(sim, int(proches.sum()),
+                       float(d[proches].mean()) if proches.any() else float("nan"),
+                       float(d[proches].max()) if proches.any() else float("nan"),
+                       float((d < 0.01).mean()) if len(d) else 0.0, historique or [])

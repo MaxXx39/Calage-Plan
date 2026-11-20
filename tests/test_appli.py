@@ -68,7 +68,7 @@ def test_recette_manuelle_rejouee(plan_a_doc, apprentissage, dossier):
     cal = calage_par_points([P1, P2], [P3])
     appris = apprentissage.recette.nettoyage
     gardes = [c["nom"] for c in appris["calques_gardes"]]
-    rec = construire_recette(PLAN_A, plan, elems, cal, [P1, P2], [P3], gardes,
+    rec = construire_recette(PLAN_A, plan, elems, cal, gardes,
                              appris["types_supprimes"] + ["HATCH"], appris["prefixe_calque"],
                              zone_polygone=[(2510200, 1141720), (2510290, 1141720),
                                             (2510290, 1141820), (2510200, 1141820)],
@@ -104,7 +104,31 @@ def _post(url, corps=None, octets=None):
         return json.loads(e.read())
 
 
-def test_serveur_parcours_complet(serveur):
+def _get(url):
+    with urllib.request.urlopen(url, timeout=300) as r:
+        return json.loads(r.read())
+
+
+def test_calage_mixte_axes_et_point():
+    """2 axes (cliqués n'importe où le long des façades) + 1 point, et un point de contrôle."""
+    from calage_core.points import calage_mixte
+    els = [
+        {"type": "axe", "plan": [17000, -16552.66, 20000, -16550.142],
+         "ref": [2510260.373, 1141763.304, 2510250.0, 1141780.25]},
+        {"type": "axe", "plan": [16382.052, -16553.176, 15905.161, -14091.758],
+         "ref": [2510267.726, 1141751.289, 2510249.206, 1141734.389]},
+        {"type": "point", "plan": list(P3[0]), "ref": list(P3[1])},
+        {"type": "point", "role": "controle", "plan": list(P2[0]), "ref": list(P2[1])},
+    ]
+    r = calage_mixte(els)
+    assert r.similitude.echelle == 0.01
+    assert abs(r.similitude.rotation_deg - 121.417) < 0.01
+    assert r.verdict == "bon"
+    with pytest.raises(ErreurCalage):
+        calage_mixte(els[:2])          # deux axes seuls : échelle indéterminée
+
+
+def test_serveur_parcours_complet(serveur, plan_b_decale):
     assert "Calage de plans" in urllib.request.urlopen(serveur + "/").read().decode()
     assert _post(f"{serveur}/api/fichier?role=ref&nom=reference.dwg", octets=REFERENCE.read_bytes())["ok"]
     assert _post(f"{serveur}/api/fichier?role=plan&nom=plan_A.dwg", octets=PLAN_A.read_bytes())["ok"]
@@ -113,22 +137,46 @@ def test_serveur_parcours_complet(serveur):
     calques = [c["nom"] for c in r["geometrie"]["calques"]]
     a = _post(serveur + "/api/accroche", {"role": "ref", "x": P1[1][0] + 0.03, "y": P1[1][1], "rayon": 0.1})
     assert abs(a["x"] - P1[1][0]) < 0.002
-    c = _post(serveur + "/api/calage", {"calage": [P1, P2], "controle": [P3]})
+    s = _post(serveur + "/api/accroche", {"role": "ref", "x": 2510260.373, "y": 1141763.304, "rayon": 0.3, "mode": "axe"})
+    assert len(s["segment"]) == 4
+    els = [{"type": "point", "plan": P1[0], "ref": P1[1]}, {"type": "point", "plan": P2[0], "ref": P2[1]},
+           {"type": "point", "role": "controle", "plan": P3[0], "ref": P3[1]}]
+    c = _post(serveur + "/api/calage", {"elements": els})
     assert c["verdict"] == "bon"
-    fam = json.loads(urllib.request.urlopen(serveur + "/api/familles").read())["familles"]
+    fam = _get(serveur + "/api/familles")["familles"]
     assert any(f["libelle"] == "Cotations" and f["coche"] for f in fam)
     gardes = [n for n in calques if not n.startswith(("ATEC", "RS_Cotation"))]
-    e = _post(serveur + "/api/exporter", {"projet": "essai", "prefixe": "X - ", "calques": gardes,
+    e = _post(serveur + "/api/exporter", {"chantier": "Chantier A", "type_plan": "Terrassement", "indice": "A",
+                                          "prefixe": "X - ", "calques": gardes,
                                           "familles": ["Cotations", "Lignes de repère"], "zone": None})
     assert e["rapport"]["fichier_produit"] and e["rapport"]["mode"] == "identique"
-    dxf = urllib.request.urlopen(serveur + e["telecharger"]).read()
-    assert dxf[:20].strip().startswith(b"0")
-    projets = json.loads(urllib.request.urlopen(serveur + "/api/projets").read())["projets"]
-    assert [p["nom"] for p in projets] == ["essai"]
-    # nouvel indice : le même plan -> rejeu tel quel
-    _post(f"{serveur}/api/fichier?role=indice&nom=plan_A.dwg", octets=PLAN_A.read_bytes())
-    i = _post(serveur + "/api/indice", {"projet": "essai"})
-    assert i["rapport"]["mode"] == "identique" and "reference" in i
+    assert urllib.request.urlopen(serveur + e["telecharger"]).read()[:20].strip().startswith(b"0")
+    ch = _get(serveur + "/api/chantiers")["chantiers"]
+    assert ch[0]["nom"] == "Chantier A" and ch[0]["reference"] == "reference.dwg"
+    assert ch[0]["types"][0]["type"] == "Terrassement"
+    # nouvel indice décalé -> recalé automatiquement, rangé avec le type de plan
+    _post(f"{serveur}/api/fichier?role=indice&nom=plan_B.dxf", octets=plan_b_decale.read_bytes())
+    i = _post(serveur + "/api/indice", {"chantier": "Chantier A", "type_plan": "Terrassement", "indice": "B"})
+    assert i["rapport"]["mode"] == "recalé" and "reference" in i
+    indices = _get(serveur + "/api/chantiers")["chantiers"][0]["types"][0]["indices"]
+    assert [x["indice"] for x in indices] == ["B", "A"]
+    # différences A -> B : les 8 lignes ajoutées sont trouvées. (Les 5 polylignes supprimées du
+    # fichier simulé existaient en double dans le plan : leur disparition ne change pas le dessin.)
+    d = _post(serveur + "/api/comparer", {"ids": [indices[1]["id"], indices[0]["id"]], "mode": "differences"})
+    assert 8 <= d["compte"]["ajoutes"] <= 12
+    assert d["compte"]["inchanges"] > 1000
+    sup = _post(serveur + "/api/comparer", {"ids": [indices[0]["id"]], "mode": "superposer"})
+    assert len(sup["calques"]) == 1
+    # calage automatique d'un autre type de plan du chantier (origine différente)
+    _post(f"{serveur}/api/fichier?role=ref&nom=reference.dwg", octets=REFERENCE.read_bytes())
+    _post(serveur + "/api/ouvrir", {"role": "ref"})
+    _post(f"{serveur}/api/fichier?role=plan&nom=plan_B.dxf", octets=plan_b_decale.read_bytes())
+    _post(serveur + "/api/ouvrir", {"role": "plan"})
+    au = _post(serveur + "/api/calage_auto", {"chantier": "Chantier A"})
+    assert au["confiance"]["niveau"] == "forte"
+    ctrl = _post(serveur + "/api/calage", {"auto": True, "elements": [
+        {"type": "point", "plan": [P3[0][0] + 1000, P3[0][1] - 500], "ref": P3[1]}]})
+    assert ctrl["verdict"] == "bon"
     # erreurs lisibles
-    err = _post(serveur + "/api/indice", {"projet": "inexistant"})
+    err = _post(serveur + "/api/indice", {"chantier": "inexistant", "type_plan": "x"})
     assert "introuvable" in err["erreur"]

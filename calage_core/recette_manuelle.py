@@ -32,11 +32,12 @@ FAMILLES_PAR_DEFAUT = ["Cotations", "Lignes de repère", "Attributs de blocs",
                        "Images, OLE, objets spéciaux"]
 
 
-def construire_recette(chemin_plan, plan_lu, elements, calage, paires_calage, paires_controle,
+def construire_recette(chemin_plan, plan_lu, elements, calage,
                        calques_gardes: list[str], types_supprimes: list[str], prefixe: str,
                        zone_polygone=None, nom_reference: str | None = None,
-                       renommages: dict | None = None) -> Recette:
-    """calage : ResultatCalagePoints ; calques_gardes : noms (accents corrects) ; zone en MN95."""
+                       renommages: dict | None = None, chantier: str | None = None,
+                       type_plan: str | None = None) -> Recette:
+    """calage : ResultatCalage ; calques_gardes : noms (accents corrects) ; zone en MN95."""
     chemin_plan = Path(chemin_plan)
     renommages = renommages or {}
     sim = calage.similitude
@@ -60,18 +61,12 @@ def construire_recette(chemin_plan, plan_lu, elements, calage, paires_calage, pa
 
     ancres = _choisir_ancres(elements, set(calques_gardes), sim.echelle)
 
-    def pts(paires, role):
-        out = []
-        for (p, q), e in zip(paires, calage.ecarts_calage if role == "calage" else calage.ecarts_controle):
-            out.append({"role": role, "plan": [round(p[0], 4), round(p[1], 4)],
-                        "reference": [round(q[0], 4), round(q[1], 4)], "ecart_m": round(e, 4)})
-        return out
-
     return Recette(
         outil=f"calage-plans {__version__}",
         cree_le=dt.datetime.now().isoformat(timespec="seconds"),
         source={
-            "methode": "calage manuel par points (2 de calage + contrôle)",
+            "methode": f"calage {calage.methode}",
+            "chantier": chantier, "type_plan": type_plan,
             "plan": chemin_plan.name, "empreinte_plan": _empreinte(chemin_plan),
             "reference": nom_reference,
             "insunits": plan_lu.insunits, "unite": UNITES_INSUNITS.get(plan_lu.insunits, "?"),
@@ -83,8 +78,9 @@ def construire_recette(chemin_plan, plan_lu, elements, calage, paires_calage, pa
             "qualite": {
                 "echelle_brute": calage.echelle_brute,
                 "echelle_arrondie": calage.echelle_arrondie,
-                "points": pts(paires_calage, "calage") + pts(paires_controle, "controle"),
+                "elements": calage.elements,
                 "verdict": calage.verdict,
+                "confiance_auto": calage.confiance,
             },
         },
         nettoyage={

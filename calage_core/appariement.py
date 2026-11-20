@@ -83,14 +83,15 @@ class IndexCible:
     calques: list                # calque (brut) de chaque entité cible
 
     @classmethod
-    def construire(cls, elements) -> "IndexCible":
+    def construire(cls, elements, fonction_points=None) -> "IndexCible":
+        fonction_points = fonction_points or points_familles
         par_cle = defaultdict(list); prop = defaultdict(list)
         par_fam = defaultdict(list); prop_fam = defaultdict(list)
         calques = []
         for i, el in enumerate(elements):
             calques.append(el.calque)
             cn = nom_normalise(el.calque)
-            for x, y, f in points_familles(el.entite):
+            for x, y, f in fonction_points(el.entite):
                 par_cle[(cn, f)].append((x, y)); prop[(cn, f)].append(i)
                 par_fam[f].append((x, y)); prop_fam[f].append(i)
         arbres = {k: cKDTree(np.asarray(v)) for k, v in par_cle.items()}
@@ -138,3 +139,16 @@ def points_transformes(e, sim: Similitude | None) -> list[tuple[float, float, st
         return pf
     xy = sim.appliquer(np.array([(p[0], p[1]) for p in pf]))
     return [(float(a), float(b), p[2]) for (a, b), p in zip(xy, pf)]
+
+
+def points_denses(e) -> list[tuple[float, float, str]]:
+    """Comme points_familles, plus le milieu de chaque segment droit.
+
+    Utile pour comparer deux indices : un trait supprimé dont les extrémités touchent d'autres
+    objets n'est pas « retrouvé » par erreur, car son milieu n'existe plus.
+    """
+    from .geometrie import segments_entite
+    pts = points_familles(e)
+    for x1, y1, x2, y2 in segments_entite(e):
+        pts.append(((x1 + x2) / 2, (y1 + y2) / 2, "trait"))
+    return pts
